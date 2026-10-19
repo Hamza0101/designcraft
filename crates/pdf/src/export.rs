@@ -145,7 +145,7 @@ fn export_pdf_with_report_inner(doc: &Document, cache: &Cache, opts: &PdfOptions
     let configuration = write::configuration(version, archival)?;
     let settings = krilla::SerializeSettings { compress_content_streams: opts.compress, configuration, ..Default::default() };
     let title = opts.title.clone().unwrap_or_else(|| doc.title.clone());
-    let created = opts.created.or_else(now_unix);
+    let created = opts.created.or_else(export_time);
     let metadata = Metadata {
         creator: "DesignCraft".into(),
         producer: "DesignCraft".into(),
@@ -412,6 +412,22 @@ fn export_booklet_inner(doc: &Document, cache: &Cache, opts: &BookletOptions) ->
     let mut warnings = ex.warnings;
     warnings.dedup();
     Ok(ExportReport { bytes, pages: pairs.len(), warnings })
+}
+
+/// The date an exported file records, when the caller gives none: `SOURCE_DATE_EPOCH` if it holds
+/// a non-negative whole number of seconds, else the clock. Pinning it makes an export repeat its
+/// bytes, which is otherwise impossible -- the only thing that differs between two exports of one
+/// document is the timestamp, and the instance id krilla derives from the bytes follows it.
+///
+/// <https://reproducible-builds.org/specs/source-date-epoch/>
+fn export_time() -> Option<i64> {
+    pinned_or(|name| std::env::var(name).ok(), now_unix)
+}
+
+/// [`export_time`] with the environment and the clock given, so a test can show which wins.
+fn pinned_or(get: impl Fn(&str) -> Option<String>, clock: impl Fn() -> Option<i64>) -> Option<i64> {
+    let pinned = get("SOURCE_DATE_EPOCH").and_then(|v| v.trim().parse::<i64>().ok()).filter(|secs| *secs >= 0);
+    pinned.or_else(clock)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2125,5 +2141,31 @@ mod eps_tests {
         assert_eq!(civil(-10_000_000_000_000), (-314918, 8, 13, 6, 13, 20));
         assert_eq!(civil(i64::MAX), (292277026596, 12, 4, 15, 30, 7));
         assert_eq!(civil(i64::MIN), (-292277022657, 1, 27, 8, 29, 52));
+    }
+}
+
+#[cfg(test)]
+mod export_time_tests {
+    use super::pinned_or;
+
+    /// What an export records when the caller gives no date: `SOURCE_DATE_EPOCH` when it holds a
+    /// non-negative whole number of seconds, the clock whenever it does not. The environment and
+    /// the clock are given here rather than set, so no test changes this process's environment --
+    /// that is `unsafe` under edition 2024 and would reach every test beside it.
+    #[test]
+    fn a_pinned_epoch_is_preferred_and_the_clock_answers_otherwise() {
+        let env = |v: Option<&'static str>| move |_: &str| v.map(str::to_owned);
+        let clock = || Some(1_000_000);
+        assert_eq!(pinned_or(env(Some("1791208980")), clock), Some(1_791_208_980), "the variable wins");
+        assert_eq!(pinned_or(env(Some("0")), clock), Some(0), "the epoch itself counts");
+        assert_eq!(pinned_or(env(Some("  1791208980  ")), clock), Some(1_791_208_980), "spaces around it are allowed");
+        for ignored in [None, Some(""), Some("   "), Some("-1"), Some("later"), Some("1791208980.5"), Some("99999999999999999999")] {
+            assert_eq!(pinned_or(env(ignored), clock), Some(1_000_000), "{ignored:?} leaves it to the clock");
+        }
+        // A platform with no clock and no variable records no date at all.
+        assert_eq!(pinned_or(env(None), || None), None);
+        assert_eq!(pinned_or(env(Some("1791208980")), || None), Some(1_791_208_980), "the variable needs no clock");
+        // Only that variable is read.
+        assert_eq!(pinned_or(|name: &str| (name == "TZ").then(|| "1791208980".to_owned()), clock), Some(1_000_000));
     }
 }
