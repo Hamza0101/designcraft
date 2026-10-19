@@ -4235,6 +4235,45 @@ fn cell_first_baseline_comes_from_cell_styles_table_regions_and_cells_and_round_
     assert_eq!(s2.first_baseline, Some(FirstBaseline::CapHeight));
 }
 
+/// The document's own `MarginPreference` is compared against the document's page size, whichever
+/// order the file lists the two preferences in. The page here is 500 wide with Left=40 Right=50, so
+/// its margin box is 410 and an even two-column split with a gutter of 10 is "0 200 210 410". Read
+/// against the 612-wide default instead, that set looks custom and freezes the columns (#1121
+/// review).
+#[test]
+fn the_document_page_size_is_known_before_its_margins_are_read() {
+    for prefs in [
+        r#"<DocumentPreference PageWidth="500" PageHeight="700" FacingPages="true" DocumentBleedTopOffset="9"/>
+  <MarginPreference ColumnCount="2" ColumnGutter="10" Top="20" Bottom="30" Left="40" Right="50" ColumnsPositions="0 200 210 410"/>"#,
+        // The same two, the other way round.
+        r#"<MarginPreference ColumnCount="2" ColumnGutter="10" Top="20" Bottom="30" Left="40" Right="50" ColumnsPositions="0 200 210 410"/>
+  <DocumentPreference PageWidth="500" PageHeight="700" FacingPages="true" DocumentBleedTopOffset="9"/>"#,
+    ] {
+        let d = import_idml_with(
+            &zip_files(&[
+                ("designmap.xml", DESIGNMAP),
+                ("Resources/Graphic.xml", GRAPHIC),
+                ("Resources/Styles.xml", STYLES),
+                (
+                    "Resources/Preferences.xml",
+                    &PREFS.replace(
+                        r#"<DocumentPreference PageWidth="500" PageHeight="700" FacingPages="true" DocumentBleedTopOffset="9"/>
+  <MarginPreference ColumnCount="2" ColumnGutter="10" Top="20" Bottom="30" Left="40" Right="50"/>"#,
+                        prefs,
+                    ),
+                ),
+                ("MasterSpreads/MasterSpread_m1.xml", MASTER),
+                ("Spreads/Spread_sp1.xml", SPREAD),
+                ("Stories/Story_s1.xml", STORY),
+            ]),
+            &|_| None,
+        )
+        .unwrap();
+        // Page 2 has no margins of its own, so it takes the document's.
+        assert_eq!(d.spreads[0].pages[1].columns.positions, None, "{prefs}");
+    }
+}
+
 /// A dragged column gutter (InDesign's Custom columns) survives an IDML import, and an even set —
 /// which InDesign writes for every page, moved or not — does not pretend to be custom (#1096).
 #[test]

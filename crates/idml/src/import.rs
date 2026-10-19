@@ -566,10 +566,18 @@ impl<'r> Importer<'r> {
     }
 
     fn run(&mut self, _root: &El, top: &[El]) -> Result<()> {
+        // The page size first of all, whatever order the file lists the preferences in: the
+        // `MarginPreference` arm below compares a page's column guides against its margin box,
+        // which is the page's width less its side margins, so it cannot run before the width is
+        // known (#1121 review).
+        for e in top.iter().filter(|e| e.local() == "DocumentPreference") {
+            self.doc_prefs(e);
+        }
         // Preferences first (page size, facing pages).
         for e in top {
             match e.local() {
-                "DocumentPreference" => self.doc_prefs(e),
+                // Read above, before anything that needs the page size.
+                "DocumentPreference" => {}
                 "TransparencyPreference" => {
                     if let Some(v) = e.get("BlendingSpace") {
                         self.settings.blend_space = if v == "RGB" { designcraft_doc::BlendSpace::Rgb } else { designcraft_doc::BlendSpace::Cmyk };
