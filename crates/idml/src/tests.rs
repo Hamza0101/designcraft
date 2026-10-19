@@ -4277,10 +4277,25 @@ fn custom_column_positions_import_and_round_trip() {
     // Including when InDesign's own arithmetic leaves the last bits different.
     assert_eq!(with(r#"ColumnsPositions="0 215.00000000000003 234.99999999999997 450""#).spreads[0].pages[0].columns.positions, None);
 
-    // Malformed sets are ignored rather than half-read: an odd count, a descending pair, a NaN.
-    for bad in
-        [r#"ColumnsPositions="0 150 170""#, r#"ColumnsPositions="0 150 90 450""#, r#"ColumnsPositions="0 x 170 450""#, r#"ColumnsPositions="""#]
-    {
+    // Guides dragged inwards together, keeping an even spacing between themselves: 10..440 is
+    // 430 wide, and `10 215 235 440` is its even two-column split, so reading the box off the
+    // outermost positions called this untouched and threw the drag away (#1121 review). The box
+    // is 450 wide whatever the guides do, and against that the set is custom.
+    let inset = with(r#"ColumnsPositions="10 215 235 440""#);
+    assert_eq!(inset.spreads[0].pages[0].columns.positions, Some(vec![10.0, 215.0, 235.0, 440.0]));
+    assert_eq!(rects(&inset), vec![(40.0, 245.0), (265.0, 470.0)]);
+
+    // Malformed sets are ignored rather than half-read: an odd count, a descending pair, a NaN,
+    // a count that is not this page's two columns, and -- since an unreadable token used to be
+    // dropped, leaving a shorter list that still looked like pairs -- a number in its place.
+    for bad in [
+        r#"ColumnsPositions="0 150 170""#,
+        r#"ColumnsPositions="0 150 90 450""#,
+        r#"ColumnsPositions="0 x 170 450""#,
+        r#"ColumnsPositions="""#,
+        r#"ColumnsPositions="0 100 120 300 320 450""#,
+        r#"ColumnsPositions="0 100 x 130 450""#,
+    ] {
         assert_eq!(with(bad).spreads[0].pages[0].columns.positions, None, "{bad}");
     }
 

@@ -589,7 +589,7 @@ impl<'r> Importer<'r> {
                     }
                 }
                 "MarginPreference" => {
-                    let (m, c) = margins_of(e);
+                    let (m, c) = margins_of(e, self.settings.page_width);
                     self.default_margins = Some((m, c));
                 }
                 "ViewPreference" => {
@@ -2534,7 +2534,7 @@ impl<'r> Importer<'r> {
                     .map(|q| (q.margins, q.columns.clone()))
             };
             let (margins, columns) = match (p.find("MarginPreference"), &from_parent) {
-                (Some(m), _) => margins_of(m),
+                (Some(m), _) => margins_of(m, r.width()),
                 (None, Some(own)) => own.clone(),
                 (None, None) => self.default_margins.clone().unwrap_or((Margins::uniform(36.0), Columns::default())),
             };
@@ -3463,27 +3463,37 @@ fn composer_in(name: &str) -> designcraft_doc::Composer {
     }
 }
 
-fn margins_of(m: &El) -> (Margins, Columns) {
+/// `page_width` is the width of the page these margins are for, so that the column guides can be
+/// compared against the margin box they were dragged inside.
+fn margins_of(m: &El, page_width: f64) -> (Margins, Columns) {
     let g = |k: &str, d: f64| m.num(k).filter(|v| v.is_finite()).unwrap_or(d);
     let margins = Margins { top: g("Top", 36.0), bottom: g("Bottom", 36.0), inside: g("Left", 36.0), outside: g("Right", 36.0) };
     let count = g("ColumnCount", 1.0).clamp(1.0, 216.0) as u32;
     let gutter = g("ColumnGutter", 12.0);
-    (margins, Columns { count, gutter, positions: custom_columns(m, count, gutter) })
+    let box_width = (page_width - margins.inside - margins.outside).max(0.0);
+    (margins, Columns { count, gutter, positions: custom_columns(m, count, gutter, box_width) })
 }
 
 /// `ColumnsPositions` when the column guides have been dragged off the even split, as pairs of
 /// offsets from the margin box's left edge. InDesign writes the attribute whether or not they have
 /// been moved, so an even set is dropped: `positions` means "custom", and keeping an even copy
 /// would freeze the columns against a later change of count or gutter.
-fn custom_columns(m: &El, count: u32, gutter: f64) -> Option<Vec<f64>> {
-    let pos = nums(m.get("ColumnsPositions")?);
-    if pos.len() < 2 || !pos.len().is_multiple_of(2) || !pos.iter().all(|v| v.is_finite()) || pos.windows(2).any(|w| w[1] < w[0]) {
+fn custom_columns(m: &El, count: u32, gutter: f64, box_width: f64) -> Option<Vec<f64>> {
+    // Every token has to be a number. Dropping an unparsable one, as `nums` does, leaves a
+    // shorter list that can still pass for a set of pairs: "0 100 x 130 450" would import as the
+    // four positions `0 100 130 450` (#1121 review).
+    let pos: Vec<f64> = m.get("ColumnsPositions")?.split_whitespace().map(|v| v.parse().ok()).collect::<Option<_>>()?;
+    // InDesign writes one pair per column, so any other length is malformed and the even split is
+    // the safer reading — `Page::column_rects` refuses such a set for the same reason.
+    if pos.len() != count as usize * 2 || !pos.iter().all(|v| v.is_finite()) || pos.windows(2).any(|w| w[1] < w[0]) {
         return None;
     }
-    // The even split over the same box, which is `0 … width` wide: compare against what we would
-    // have drawn anyway. The tolerance only absorbs float noise — a dragged guide moves far more.
-    let width = pos.last().copied().unwrap_or(0.0) - pos[0];
-    let even = designcraft_doc::page::column_rects(Rect::new(pos[0], 0.0, pos[0] + width, 1.0), count, gutter);
+    // The even split over the margin box the guides live in — the page less its two side margins —
+    // and not over the span of the positions themselves, which is the box only while the outermost
+    // guides sit on its edges. Inferring it from the endpoints made an evenly spaced set that had
+    // been dragged inwards together look untouched, and dropped it (#1121 review). The tolerance
+    // only absorbs float noise; a dragged guide moves far more.
+    let even = designcraft_doc::page::column_rects(Rect::new(0.0, 0.0, box_width, 1.0), count, gutter);
     let flat: Vec<f64> = even.iter().flat_map(|r| [r.x0, r.x1]).collect();
     (flat.len() != pos.len() || flat.iter().zip(&pos).any(|(a, b)| (a - b).abs() > 1e-4)).then_some(pos)
 }
@@ -4006,7 +4016,7 @@ mod page_column_import_safety_tests {
                 .attr("Bottom", "-inf")
                 .attr("Left", "NaN")
                 .attr("Right", "1e309");
-            let (margins, columns) = margins_of(&m);
+            let (margins, columns) = margins_of(&m, 612.0);
             assert_eq!(columns.count, expected);
             assert_eq!(columns.gutter, 12.);
             assert_eq!(margins, Margins::uniform(36.));
