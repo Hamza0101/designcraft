@@ -438,3 +438,41 @@ fn usage_lists_the_automation_root_flags() {
     let usage = String::from_utf8_lossy(&out.stdout);
     assert!(usage.contains("--automation-read-root DIR") && usage.contains("--automation-write-root DIR"), "{usage}");
 }
+
+/// Every file a run writes is reported on stdout as one JSON line, where a `--cmd` result already
+/// goes, so a script can read what was written without merging in stderr (#1214). The lines meant
+/// for a person stay on stderr.
+#[test]
+fn files_written_are_reported_on_stdout_as_json() {
+    let dir = std::env::temp_dir().join(format!("dc-cli-wrote-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pages = dir.join("pages");
+    let out = cli().args(["run", "--sample", "--all-pages", pages.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<serde_json::Value> = stdout.lines().map(|l| serde_json::from_str(l).expect("each line is JSON")).collect();
+    assert!(!lines.is_empty(), "a page export says what it wrote: {stdout:?}");
+    assert_eq!(lines.len(), std::fs::read_dir(&pages).unwrap().count(), "one line per file written");
+    for (n, line) in lines.iter().enumerate() {
+        let path = line["wrote"].as_str().expect("the path it wrote");
+        assert!(std::path::Path::new(path).is_file(), "{path} exists");
+        assert_eq!(path, pages.join(format!("page-{:03}.png", n + 1)).to_string_lossy(), "in page order");
+        assert!(line["width"].as_u64().is_some_and(|w| w > 0) && line["height"].as_u64().is_some_and(|h| h > 0), "{line}");
+    }
+
+    // The human lines are still on stderr, and nothing machine-readable is mixed into them.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(stderr.lines().filter(|l| l.starts_with("wrote ")).count(), lines.len());
+    assert!(!stderr.lines().any(|l| l.starts_with('{')), "stderr carries no JSON: {stderr:?}");
+
+    // A PDF export says the same, with what a PDF has to report.
+    let pdf = dir.join("out.pdf");
+    let out = cli().args(["run", "--sample", "--export", pdf.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let line: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).expect("JSON");
+    assert_eq!(line["wrote"].as_str(), Some(pdf.to_string_lossy().as_ref()));
+    assert!(line["pages"].as_u64().is_some_and(|p| p > 0) && line["bytes"].as_u64().is_some_and(|b| b > 0), "{line}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

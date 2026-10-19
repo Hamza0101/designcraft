@@ -355,10 +355,12 @@ fn run(args: &[String]) -> Result<(), String> {
                         for w in r["warnings"].as_array().into_iter().flatten() {
                             eprintln!("warning: {}", w.as_str().unwrap_or_default());
                         }
+                        wrote(json!({"wrote": out, "pages": r["pages"], "bytes": r["bytes"], "warnings": r["warnings"]}));
                     }
                     Export::Document => {
                         s.execute("file.saveAs", &json!({"path": out})).map_err(|e| e.to_string())?;
                         eprintln!("saved {out}");
+                        wrote(json!({"wrote": out, "saved": true}));
                     }
                     Export::Pptx => {
                         let r = s.execute("file.exportPptx", &json!({"path": out})).map_err(|e| e.to_string())?;
@@ -366,10 +368,12 @@ fn run(args: &[String]) -> Result<(), String> {
                         for w in r["warnings"].as_array().into_iter().flatten() {
                             eprintln!("warning: {}", w.as_str().unwrap_or_default());
                         }
+                        wrote(json!({"wrote": out, "slides": r["slides"], "bytes": r["bytes"], "warnings": r["warnings"]}));
                     }
                     Export::Command(cmd) => {
                         let r = s.execute(cmd, &json!({"path": out})).map_err(|e| e.to_string())?;
                         eprintln!("wrote {out} ({} bytes)", r["bytes"]);
+                        wrote(json!({"wrote": out, "bytes": r["bytes"]}));
                     }
                 }
             }
@@ -398,8 +402,17 @@ fn export(s: &mut Session, out: &str, page: usize, scale: f64) -> Result<(), Str
     let lower = out.to_lowercase();
     let bytes = if lower.ends_with(".jpg") || lower.ends_with(".jpeg") { img.to_jpeg(90) } else { img.to_png() };
     designcraft_engine::atomic::write_atomic(std::path::Path::new(out), &bytes).map_err(|e| format!("{out}: {e}"))?;
-    eprintln!("wrote {out} ({}×{}, {:.1} ms, {} glyphs)", img.width, img.height, t.elapsed().as_secs_f64() * 1000.0, r.stats.glyphs);
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("wrote {out} ({}×{}, {ms:.1} ms, {} glyphs)", img.width, img.height, r.stats.glyphs);
+    wrote(json!({"wrote": out, "width": img.width, "height": img.height, "ms": ms, "glyphs": r.stats.glyphs}));
     Ok(())
+}
+
+/// A file this run wrote, as one JSON line on stdout -- the same place a `--cmd` result goes, so a
+/// script can read what was written without merging in stderr (#1214). The line on stderr stays as
+/// it is, for anyone reading along.
+fn wrote(result: Value) {
+    outln!("{}", serde_json::to_string(&result).unwrap_or_default());
 }
 
 /// `describe ID`: one command's documentation.
