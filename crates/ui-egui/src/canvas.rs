@@ -953,9 +953,6 @@ fn shown_area(app: &DesignApp, doc: &Document, xf: &Xf, slot: &SpreadSlot) -> Re
 fn draw_guides(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Document, layout: &CanvasLayout, t: &Tokens) {
     let s = &doc.settings;
     for slot in &layout.slots {
-        if !slot_can_show(painter, xf, slot) {
-            continue;
-        }
         let Some(sp) = doc.spread(slot.spread) else { continue };
         // Everything below is in spread coordinates, placed through the slot (which may be turned).
         let m = slot.xf;
@@ -1070,11 +1067,21 @@ fn path_screen(it: &Item, xf: &Xf, a: Affine) -> Vec<Vec<Pos2>> {
     out
 }
 
-/// Whether a slot can show anything in the painter's clip. Everything `draw_frames` does for a
-/// slot costs work in proportion to the items on its spread -- `overset_marks` searches the whole
-/// document for each overset frame -- so a document of many spreads paid for all of them on every
-/// frame, whatever was on screen (#1343). The test is the slot's `reach`, which includes the
-/// pasteboard around the pages, so an item sitting off the spread still draws its edges.
+/// Whether a slot can show anything `draw_frames` would draw for it, in the painter's clip.
+/// Everything that function does for a slot costs work in proportion to the items on its spread
+/// -- `overset_marks` searches the whole document for each overset frame -- so a document of many
+/// spreads paid for all of them on every frame, whatever was on screen (#1343).
+///
+/// The test is the slot's `reach`, which covers the pasteboard around the pages *and* the outline
+/// of every item the overlay draws, this spread's and the parent items shown through its pages:
+/// an item dragged past the pasteboard still has its edges drawn, so the pasteboard rectangle
+/// alone would be the wrong test.
+///
+/// Only `draw_frames` is culled. The guides reach across the whole pasteboard rather than one
+/// slot's part of it, and the flattener preview draws each item's effect outset, which `reach`
+/// does not include (it is `designcraft-render`'s to compute, not the layout's); both are cheap per
+/// slot, so they draw for every spread as before rather than be culled on a rectangle that does
+/// not bound them.
 fn slot_can_show(painter: &egui::Painter, xf: &Xf, slot: &SpreadSlot) -> bool {
     slot_in_clip(xf, slot, painter.clip_rect())
 }
@@ -2702,9 +2709,6 @@ fn draw_flattener_preview(painter: &egui::Painter, xf: &Xf, doc: &Document, layo
     }
     let red = Color32::from_rgba_unmultiplied(230, 30, 30, 110);
     for slot in &layout.slots {
-        if !slot_can_show(painter, xf, slot) {
-            continue;
-        }
         let Some(sp) = doc.spread(slot.spread) else { continue };
         for it in sp.items.iter().filter(|it| !it.hidden && transparent(it)) {
             let r = it.bounds().inflate(designcraft_render::effect_outset(it), designcraft_render::effect_outset(it));
