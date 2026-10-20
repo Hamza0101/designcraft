@@ -953,6 +953,9 @@ fn shown_area(app: &DesignApp, doc: &Document, xf: &Xf, slot: &SpreadSlot) -> Re
 fn draw_guides(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Document, layout: &CanvasLayout, t: &Tokens) {
     let s = &doc.settings;
     for slot in &layout.slots {
+        if !slot_can_show(painter, xf, slot) {
+            continue;
+        }
         let Some(sp) = doc.spread(slot.spread) else { continue };
         // Everything below is in spread coordinates, placed through the slot (which may be turned).
         let m = slot.xf;
@@ -1067,12 +1070,31 @@ fn path_screen(it: &Item, xf: &Xf, a: Affine) -> Vec<Vec<Pos2>> {
     out
 }
 
+/// Whether a slot can show anything in the painter's clip. Everything `draw_frames` does for a
+/// slot costs work in proportion to the items on its spread -- `overset_marks` searches the whole
+/// document for each overset frame -- so a document of many spreads paid for all of them on every
+/// frame, whatever was on screen (#1343). The test is the slot's `reach`, which includes the
+/// pasteboard around the pages, so an item sitting off the spread still draws its edges.
+fn slot_can_show(painter: &egui::Painter, xf: &Xf, slot: &SpreadSlot) -> bool {
+    slot_in_clip(xf, slot, painter.clip_rect())
+}
+
+/// [`slot_can_show`] against a clip rectangle given directly, so the geometry can be tested
+/// without a painter.
+fn slot_in_clip(xf: &Xf, slot: &SpreadSlot, clip: Rect) -> bool {
+    // A hair of slack, so an edge exactly on the boundary is not cut.
+    xf.rect(slot.reach).expand(2.0).intersects(clip)
+}
+
 fn draw_frames(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Document, layout: &CanvasLayout) {
     if !app.ui.frame_edges {
         return;
     }
     let ported = ported_frames(app, doc);
     for slot in &layout.slots {
+        if !slot_can_show(painter, xf, slot) {
+            continue;
+        }
         let Some(sp) = doc.spread(slot.spread) else { continue };
         let a = slot.xf;
         // Parent items on document pages, and base parents' items on a parent spread: dotted edges.
@@ -2680,6 +2702,9 @@ fn draw_flattener_preview(painter: &egui::Painter, xf: &Xf, doc: &Document, layo
     }
     let red = Color32::from_rgba_unmultiplied(230, 30, 30, 110);
     for slot in &layout.slots {
+        if !slot_can_show(painter, xf, slot) {
+            continue;
+        }
         let Some(sp) = doc.spread(slot.spread) else { continue };
         for it in sp.items.iter().filter(|it| !it.hidden && transparent(it)) {
             let r = it.bounds().inflate(designcraft_render::effect_outset(it), designcraft_render::effect_outset(it));
@@ -2995,6 +3020,33 @@ mod parent_canvas_tests;
 mod tests {
     use designcraft_geom::Unit;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    /// Only the slots that can show are drawn. Every per-slot overlay costs work in proportion to
+    /// the items on its spread, so a long document paid for all of them on every frame (#1343):
+    /// 48 spreads at fit-spread is one or two slots of work, not 48.
+    #[test]
+    fn off_screen_slots_are_culled() {
+        use designcraft_doc::build::NewDocument;
+        let doc = designcraft_doc::Document::new(&NewDocument { pages: 96, ..Default::default() });
+        let layout = designcraft_tools::CanvasLayout::new(&doc, false);
+        assert!(layout.slots.len() >= 40, "a long document: {}", layout.slots.len());
+
+        // Fit the first spread in a 1440 x 900 view, as the report measured.
+        let first = layout.slots[0].bounds;
+        let view = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0));
+        let zoom = (f64::from(view.width()) / first.width()).min(f64::from(view.height()) / first.height());
+        let xf = super::Xf { min: view.min, origin: designcraft_geom::Point::new(first.x0, first.y0), zoom, rot: 0, pivot: view.center() };
+
+        let shown = layout.slots.iter().filter(|s| super::slot_in_clip(&xf, s, view)).count();
+        assert!(shown >= 1, "the spread in view is drawn");
+        assert!(shown <= 4, "only the spreads near the view are drawn, not {} of {}", shown, layout.slots.len());
+
+        // Scrolled to the end, the first spread is not drawn and the last is.
+        let last = layout.slots[layout.slots.len() - 1].bounds;
+        let far = super::Xf { origin: designcraft_geom::Point::new(last.x0, last.y0), ..xf };
+        assert!(!super::slot_in_clip(&far, &layout.slots[0], view), "the first spread is off screen");
+        assert!(super::slot_in_clip(&far, &layout.slots[layout.slots.len() - 1], view), "the last spread is on screen");
+    }
 
     use super::*;
 

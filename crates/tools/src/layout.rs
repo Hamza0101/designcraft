@@ -15,6 +15,11 @@ pub struct SpreadSlot {
     pub rotation: u8,
     /// Spread page bounds in canvas coordinates.
     pub bounds: Rect,
+    /// Canvas area this slot can hold anything in: its pages plus the pasteboard around them.
+    /// An item may sit off the spread, so this and not [`Self::bounds`] is what an overlay has to
+    /// test to know the slot cannot show (#1343). Not serialised, like `xf`.
+    #[serde(skip)]
+    pub reach: Rect,
 }
 
 impl SpreadSlot {
@@ -64,7 +69,7 @@ impl CanvasLayout {
             let w = cb.width();
             let pr = Rect::new(cb.x0 - px.max(w), cb.y0 - py * 0.5, cb.x1 + px.max(w), cb.y1 + py * 0.5);
             pb = Some(pb.map_or(pr, |p| p.union(pr)));
-            slots.push(SpreadSlot { spread: r, xf, rotation, bounds: cb });
+            slots.push(SpreadSlot { spread: r, xf, rotation, bounds: cb, reach: pr });
             y += cb.height() + SPREAD_GAP;
         }
         let pasteboard = pb.unwrap_or(Rect::new(-500.0, -500.0, 500.0, 500.0)).inflate(0.0, py * 0.5);
@@ -121,6 +126,32 @@ fn dist_y(r: Rect, y: f64) -> f64 {
 mod tests {
     use super::*;
     use designcraft_doc::build::NewDocument;
+
+    /// Each slot knows the canvas area it can hold anything in: the pages plus the pasteboard
+    /// around them. An overlay culls on this rather than the page bounds, so an item sitting off
+    /// the spread is not skipped (#1343).
+    #[test]
+    fn a_slots_reach_covers_the_pasteboard_around_its_pages() {
+        let d = Document::new(&NewDocument { pages: 6, ..Default::default() });
+        let l = CanvasLayout::new(&d, false);
+        assert!(l.slots.len() >= 3, "{}", l.slots.len());
+        let (px, py) = d.settings.pasteboard;
+        assert!(px > 0.0 && py > 0.0, "the fixture has a pasteboard: {px} x {py}");
+        for s in &l.slots {
+            // The pages are inside it, with room on every side.
+            assert!(s.reach.x0 < s.bounds.x0 && s.reach.x1 > s.bounds.x1, "{:?} vs {:?}", s.reach, s.bounds);
+            assert!(s.reach.y0 < s.bounds.y0 && s.reach.y1 > s.bounds.y1, "{:?} vs {:?}", s.reach, s.bounds);
+            // Sideways it reaches at least the pasteboard width, so an item beside the spread is
+            // covered however wide the spread is.
+            assert!(s.reach.x0 <= s.bounds.x0 - px.min(s.bounds.width()), "{:?}", s.reach);
+            // And the whole of it is inside the pasteboard the canvas scrolls over.
+            assert!(l.pasteboard.contains_rect(s.reach), "{:?} outside {:?}", s.reach, l.pasteboard);
+        }
+        // Slots far apart on the canvas do not reach each other's pages, so culling one keeps the
+        // other: the first and last of six pages are three spreads apart.
+        let (first, last) = (l.slots[0].reach, l.slots[l.slots.len() - 1].reach);
+        assert!(first.y1 < last.y0 || last.y1 < first.y0, "{first:?} {last:?}");
+    }
 
     #[test]
     fn spreads_stack_on_the_spine() {
