@@ -492,5 +492,26 @@ fn files_written_are_reported_on_stdout_as_json() {
     assert_eq!(lines[1]["wrote"].as_str(), Some(saved.to_string_lossy().as_ref()));
     assert_eq!(lines[1]["saved"], serde_json::json!(true), "{}", lines[1]);
     assert!(pptx.is_file() && saved.is_file());
+
+    // A --cmd that writes a file reports it as well: the command result is its own line, and the
+    // written file gets the same record an --export would have given it.
+    let cmd_pdf = dir.join("cmd.pdf");
+    let out = cli().args(["run", "--sample", "--cmd", &format!("file.exportPdf={{\"path\": {:?}}}", cmd_pdf.to_string_lossy())]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<serde_json::Value> = stdout.lines().map(|l| serde_json::from_str(l).expect("each line is JSON")).collect();
+    assert_eq!(lines.len(), 2, "the command result, then what it wrote: {stdout:?}");
+    assert!(lines[0]["path"].is_string() && lines[0]["wrote"].is_null(), "the command's own result first: {}", lines[0]);
+    assert_eq!(lines[1]["wrote"].as_str(), Some(cmd_pdf.to_string_lossy().as_ref()), "{}", lines[1]);
+    assert!(lines[1]["bytes"].as_u64().is_some_and(|b| b > 0) && lines[1]["warnings"].is_array(), "{}", lines[1]);
+    assert!(cmd_pdf.is_file());
+    assert!(String::from_utf8_lossy(&out.stderr).lines().any(|l| l.starts_with("wrote ")), "and a human line on stderr");
+
+    // A --cmd that writes nothing still reports only its result.
+    let out = cli().args(["run", "--sample", "--cmd", "document.list"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout.lines().count(), 1, "{stdout:?}");
+    assert!(!stdout.contains("wrote"), "{stdout:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

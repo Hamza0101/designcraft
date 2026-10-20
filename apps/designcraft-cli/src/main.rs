@@ -39,7 +39,7 @@ use designcraft_engine::Session;
 use serde_json::{Value, json};
 
 /// The usage block. Shared by `--help` (stdout, success) and an unknown command (stderr, failure).
-const USAGE: &str = "usage: designcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--page N] [--scale S] [--pdf-options JSON] [--export OUT] [--all-pages DIR]\n         (--page, --scale and --pdf-options apply to the exports that follow them)\n         stdout carries one JSON line per --cmd result and one {\"wrote\": PATH, ...} line per file written, in the order they happen;\n         the human lines stay on stderr\n       designcraft-cli commands [FILTER]\n       designcraft-cli describe COMMAND\n       designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--save OUT] [--export OUT] [--keep-going]\n       designcraft-cli app [--port PORT] COMMAND [JSON] | --method METHOD [JSON]\n       designcraft-cli mcp [--connect PORT] [--sample] [--automation-read-root DIR] [--automation-write-root DIR]\n         the two roots confine every file the agent's commands read (open, placed images, data sources, libraries) and\n         write (save, export, package) to those folders, links followed. A root left out grants none of its access.\n         They run the in-process server, so they conflict with --connect (a running app is not confined by them).\n       designcraft-cli perf [--pages N] [--runs N] [--strict]\n       designcraft-cli bench FILE [--runs N]\n       designcraft-cli links\n       designcraft-cli --version";
+const USAGE: &str = "usage: designcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--page N] [--scale S] [--pdf-options JSON] [--export OUT] [--all-pages DIR]\n         (--page, --scale and --pdf-options apply to the exports that follow them)\n         stdout carries one JSON line per --cmd result and one {\"wrote\": PATH, ...} line per file written, including by a --cmd, in the order they happen;\n         the human lines stay on stderr\n       designcraft-cli commands [FILTER]\n       designcraft-cli describe COMMAND\n       designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--save OUT] [--export OUT] [--keep-going]\n       designcraft-cli app [--port PORT] COMMAND [JSON] | --method METHOD [JSON]\n       designcraft-cli mcp [--connect PORT] [--sample] [--automation-read-root DIR] [--automation-write-root DIR]\n         the two roots confine every file the agent's commands read (open, placed images, data sources, libraries) and\n         write (save, export, package) to those folders, links followed. A root left out grants none of its access.\n         They run the in-process server, so they conflict with --connect (a running app is not confined by them).\n       designcraft-cli perf [--pages N] [--runs N] [--strict]\n       designcraft-cli bench FILE [--runs N]\n       designcraft-cli links\n       designcraft-cli --version";
 
 /// `script --help`: the script syntax, otherwise only in `describe script.run` and docs/agents.md.
 const SCRIPT_HELP: &str = r#"usage: designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--save OUT] [--export OUT] [--keep-going]
@@ -328,6 +328,24 @@ fn run(args: &[String]) -> Result<(), String> {
                 results.push(r.clone());
                 if !r.is_null() {
                     outln!("{}", serde_json::to_string(&r).unwrap_or_default());
+                }
+                // A command writes a file too, and a run reports every file it writes (#1214).
+                // The commands that do answer with the path they wrote -- which they may have
+                // normalised, so it is theirs and not the one asked for -- and the number of
+                // bytes that went into it. A command that only names a path it read (`file.open`,
+                // `book.list`) has no `bytes`, so it reports nothing here.
+                if let Some(path) = r.get("path").and_then(Value::as_str)
+                    && let Some(bytes) = r.get("bytes").cloned().filter(Value::is_number)
+                {
+                    eprintln!("wrote {path} ({bytes} bytes)");
+                    let mut line = json!({"wrote": path, "bytes": bytes});
+                    for key in ["pages", "sheets", "slides"] {
+                        if let Some(v) = r.get(key) {
+                            line[key] = v.clone();
+                        }
+                    }
+                    line["warnings"] = warnings(&r);
+                    wrote(line);
                 }
             }
             "--page" => page = val()?.parse().map_err(|_| "bad --page")?,
