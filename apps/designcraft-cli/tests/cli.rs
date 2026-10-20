@@ -474,5 +474,23 @@ fn files_written_are_reported_on_stdout_as_json() {
     let line: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).expect("JSON");
     assert_eq!(line["wrote"].as_str(), Some(pdf.to_string_lossy().as_ref()));
     assert!(line["pages"].as_u64().is_some_and(|p| p > 0) && line["bytes"].as_u64().is_some_and(|b| b > 0), "{line}");
+    // `warnings` is an array whether the export reported any or not, as the documented shape of
+    // the line says: the result leaves it out when there are none.
+    assert!(line["warnings"].is_array(), "{line}");
+
+    // A deck and a saved document report in the same shape, with what each has to say.
+    let pptx = dir.join("out.pptx");
+    let saved = dir.join("out.designcraft");
+    let out = cli().args(["run", "--sample", "--export", pptx.to_str().unwrap(), "--export", saved.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<serde_json::Value> = stdout.lines().map(|l| serde_json::from_str(l).expect("each line is JSON")).collect();
+    assert_eq!(lines.len(), 2, "one line per file, in the order the exports were given: {stdout:?}");
+    assert_eq!(lines[0]["wrote"].as_str(), Some(pptx.to_string_lossy().as_ref()));
+    assert!(lines[0]["slides"].as_u64().is_some_and(|n| n > 0) && lines[0]["bytes"].as_u64().is_some_and(|b| b > 0), "{}", lines[0]);
+    assert!(lines[0]["warnings"].is_array(), "{}", lines[0]);
+    assert_eq!(lines[1]["wrote"].as_str(), Some(saved.to_string_lossy().as_ref()));
+    assert_eq!(lines[1]["saved"], serde_json::json!(true), "{}", lines[1]);
+    assert!(pptx.is_file() && saved.is_file());
     let _ = std::fs::remove_dir_all(&dir);
 }
