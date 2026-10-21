@@ -347,6 +347,14 @@ fn run(args: &[String]) -> Result<(), String> {
                     line["warnings"] = warnings(&r);
                     wrote(line);
                 }
+                // A command that writes a whole folder (file.package) answers with the files it
+                // wrote rather than one `path`, so each of them is reported in turn -- the run
+                // reports every file it writes (#1214). No `bytes`: the command doesn't say.
+                for file in r.get("files").and_then(Value::as_array).into_iter().flatten() {
+                    let Some(path) = file.as_str() else { continue };
+                    eprintln!("wrote {path}");
+                    wrote(json!({"wrote": path}));
+                }
             }
             "--page" => page = val()?.parse().map_err(|_| "bad --page")?,
             "--scale" => {
@@ -391,7 +399,12 @@ fn run(args: &[String]) -> Result<(), String> {
                     Export::Command(cmd) => {
                         let r = s.execute(cmd, &json!({"path": out})).map_err(|e| e.to_string())?;
                         eprintln!("wrote {out} ({} bytes)", r["bytes"]);
-                        wrote(json!({"wrote": out, "bytes": r["bytes"]}));
+                        for w in r["warnings"].as_array().into_iter().flatten() {
+                            eprintln!("warning: {}", w.as_str().unwrap_or_default());
+                        }
+                        // EPUB and HTML exports report what they left out: the line carries it as
+                        // the PDF and deck lines do.
+                        wrote(json!({"wrote": out, "bytes": r["bytes"], "warnings": warnings(&r)}));
                     }
                 }
             }

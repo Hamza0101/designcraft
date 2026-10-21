@@ -507,6 +507,32 @@ fn files_written_are_reported_on_stdout_as_json() {
     assert!(cmd_pdf.is_file());
     assert!(String::from_utf8_lossy(&out.stderr).lines().any(|l| l.starts_with("wrote ")), "and a human line on stderr");
 
+    // A command that writes a whole folder answers with the files it wrote, not one path, and
+    // every one of them is reported (#1304 review).
+    let pkg = dir.join("pkg");
+    let out = cli().args(["run", "--sample", "--cmd", &format!("file.package={{\"dir\": {:?}}}", pkg.to_string_lossy())]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<serde_json::Value> = stdout.lines().map(|l| serde_json::from_str(l).expect("each line is JSON")).collect();
+    let (results, written): (Vec<_>, Vec<_>) = lines.iter().partition(|l| l["wrote"].is_null());
+    assert_eq!(results.len(), 1, "the command's own result: {stdout:?}");
+    let files = results[0]["files"].as_array().expect("the files it wrote");
+    assert!(files.len() > 1, "the sample packages several files: {}", results[0]["files"]);
+    assert_eq!(written.len(), files.len(), "one record per file written: {stdout:?}");
+    for (record, file) in written.iter().zip(files) {
+        assert_eq!(record["wrote"], *file, "in the order the command reports them");
+        assert!(std::path::Path::new(file.as_str().unwrap_or("")).is_file(), "{file} exists");
+    }
+
+    // An EPUB or HTML export goes through its command, whose result can carry warnings: the line
+    // keeps them, as the PDF and deck lines do (#1304 review).
+    let epub = dir.join("out.epub");
+    let out = cli().args(["run", "--sample", "--export", epub.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let line: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).expect("JSON");
+    assert_eq!(line["wrote"].as_str(), Some(epub.to_string_lossy().as_ref()));
+    assert!(line["bytes"].as_u64().is_some_and(|b| b > 0) && line["warnings"].is_array(), "{line}");
+
     // A --cmd that writes nothing still reports only its result.
     let out = cli().args(["run", "--sample", "--cmd", "document.list"]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
