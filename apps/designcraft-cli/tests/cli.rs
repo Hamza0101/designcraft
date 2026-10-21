@@ -449,7 +449,7 @@ fn the_argument_parser_refuses_what_it_cannot_mean() {
 
     // photocraft#423: `<sub> --help` was read as an unknown option. It asks about the
     // subcommand, goes to stdout and succeeds.
-    for sub in ["run", "commands", "describe", "app", "mcp", "perf", "bench", "links"] {
+    for sub in ["run", "commands", "describe", "app", "mcp", "perf", "bench", "validate-pdf", "links"] {
         let out = cli().args([sub, "--help"]).output().unwrap();
         assert!(out.status.success(), "{sub} --help: {}", String::from_utf8_lossy(&out.stderr));
         let text = String::from_utf8_lossy(&out.stdout);
@@ -478,6 +478,18 @@ fn the_argument_parser_refuses_what_it_cannot_mean() {
     let out = cli().args(["run", "--sample", "--export"]).output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--export needs a value"));
+
+    // And a missing value in front of an export is still a missing value: the order of the
+    // options is beside the point until `--scale` has one, and "put it before its --export" was
+    // advice for a list that already does that.
+    let out = cli().current_dir(&dir).args(["run", "--sample", "--scale", "--export", "out.png"]).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err:?}");
+    assert!(err.contains("--scale needs a value"), "{err:?}");
+    assert!(!err.contains("has no --export"), "{err:?}");
+    // `./--export` is a file name, which is no way out of a missing `--scale`.
+    assert!(!err.contains("./"), "{err:?}");
+    assert!(!dir.join("out.png").exists(), "and nothing is exported");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

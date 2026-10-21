@@ -39,7 +39,7 @@ use designcraft_engine::Session;
 use serde_json::{Value, json};
 
 /// The usage block. Shared by `--help` (stdout, success) and an unknown command (stderr, failure).
-const USAGE: &str = "usage: designcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--page N] [--scale S] [--pdf-options JSON] [--export OUT] [--all-pages DIR]\n         (--page, --scale and --pdf-options apply to the exports that follow them)\n       designcraft-cli commands [FILTER]\n       designcraft-cli describe COMMAND\n       designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--save OUT] [--export OUT] [--keep-going]\n       designcraft-cli app [--port PORT] COMMAND [JSON] | --method METHOD [JSON]\n       designcraft-cli mcp [--connect PORT] [--sample] [--automation-read-root DIR] [--automation-write-root DIR]\n         the two roots confine every file the agent's commands read (open, placed images, data sources, libraries) and\n         write (save, export, package) to those folders, links followed. A root left out grants none of its access.\n         They run the in-process server, so they conflict with --connect (a running app is not confined by them).\n       designcraft-cli perf [--pages N] [--runs N] [--strict]\n       designcraft-cli bench FILE [--runs N]\n       designcraft-cli links\n       designcraft-cli --version";
+const USAGE: &str = "usage: designcraft-cli run [--in FILE | --sample] [--cmd ID[=JSON]]... [--page N] [--scale S] [--pdf-options JSON] [--export OUT] [--all-pages DIR]\n         (--page, --scale and --pdf-options apply to the exports that follow them)\n       designcraft-cli commands [FILTER]\n       designcraft-cli describe COMMAND\n       designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--save OUT] [--export OUT] [--keep-going]\n       designcraft-cli app [--port PORT] COMMAND [JSON] | --method METHOD [JSON]\n       designcraft-cli mcp [--connect PORT] [--sample] [--automation-read-root DIR] [--automation-write-root DIR]\n         the two roots confine every file the agent's commands read (open, placed images, data sources, libraries) and\n         write (save, export, package) to those folders, links followed. A root left out grants none of its access.\n         They run the in-process server, so they conflict with --connect (a running app is not confined by them).\n       designcraft-cli perf [--pages N] [--runs N] [--strict]\n       designcraft-cli bench FILE [--runs N]\n       designcraft-cli validate-pdf FILE.pdf\n       designcraft-cli links\n       designcraft-cli --version";
 
 /// `script --help`: the script syntax, otherwise only in `describe script.run` and docs/agents.md.
 const SCRIPT_HELP: &str = r#"usage: designcraft-cli script [FILE|-] [--in FILE | --sample] [--connect PORT] [--save OUT] [--export OUT] [--keep-going]
@@ -95,20 +95,30 @@ fn stdout_failed(e: std::io::Error) -> ! {
     std::process::exit(1);
 }
 
+/// Options whose value is a path, and so can be written `./-name` when it starts with `-`, the
+/// shell's own way out. None of them has an `--opt=value` form (the automation roots, parsed in
+/// [`automation_args`], do and say so themselves).
+const PATH_OPTIONS: [&str; 4] = ["--in", "--export", "--all-pages", "--save"];
+
 /// An option's value, refusing the next token when it is another option: `--export --scale` used
-/// to write a file called `--scale`. A value that has to start with `-` is written `./-name` for a
-/// path (the shell's own way out), since this parser has no `--opt=value` form.
+/// to write a file called `--scale`.
 fn value(a: &str, next: Option<&String>) -> Result<String, String> {
     match next {
         None => Err(format!("{a} needs a value")),
-        // A negative number is a value; anything else that starts with `-` is another option.
-        // `-inf` and `-nan` parse as numbers too, so a bad `--scale` still reaches the check that
-        // reports it rather than being called an option.
-        Some(v) if v.starts_with('-') && v.len() > 1 && v.parse::<f64>().is_err() => {
-            Err(format!("{a} needs a value and `{v}` is another option; if you did mean that name, write `./{v}`"))
+        Some(v) if !can_be_value(v) => {
+            // The way out is worth offering only where the value could be such a name.
+            let out = if PATH_OPTIONS.contains(&a) { format!("; if you did mean that name, write `./{v}`") } else { String::new() };
+            Err(format!("{a} needs a value and `{v}` is another option{out}"))
         }
         Some(v) => Ok(v.clone()),
     }
+}
+
+/// Whether a token can be an option's value. A negative number can; anything else that starts
+/// with `-` is another option. `-inf` and `-nan` parse as numbers too, so a bad `--scale` still
+/// reaches the check that reports it rather than being called an option.
+fn can_be_value(v: &str) -> bool {
+    !(v.starts_with('-') && v.len() > 1 && v.parse::<f64>().is_err())
 }
 
 /// The usage lines for one subcommand, for `<sub> --help`. Each line of [`USAGE`] names its
@@ -281,20 +291,18 @@ so drop --connect (or use --connect without the roots)"
 /// They apply to the exports that follow them, so one after the last export would do nothing.
 fn option_after_last_export(args: &[String]) -> Option<&str> {
     let mut unused = None;
-    let mut it = args.iter();
+    let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
+        let takes_value = matches!(a.as_str(), "--page" | "--scale" | "--pdf-options" | "--export" | "--all-pages" | "--in" | "--cmd");
+        // An option whose value is missing says so itself, and until it is given one there is no
+        // order to judge: `--scale --export out.png` is a missing `--scale` value, not an export
+        // that `--scale` is somehow not in front of.
+        if takes_value && it.next_if(|v| can_be_value(v)).is_none() {
+            return None;
+        }
         match a.as_str() {
-            "--page" | "--scale" | "--pdf-options" => {
-                unused = unused.or(Some(a.as_str()));
-                it.next();
-            }
-            "--export" | "--all-pages" => {
-                unused = None;
-                it.next();
-            }
-            "--in" | "--cmd" => {
-                it.next();
-            }
+            "--page" | "--scale" | "--pdf-options" => unused = unused.or(Some(a.as_str())),
+            "--export" | "--all-pages" => unused = None,
             _ => {}
         }
     }
