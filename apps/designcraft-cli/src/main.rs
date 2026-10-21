@@ -95,8 +95,63 @@ fn stdout_failed(e: std::io::Error) -> ! {
     std::process::exit(1);
 }
 
+/// An option's value, refusing the next token when it is another option: `--export --scale` used
+/// to write a file called `--scale`. A value that has to start with `-` is written `./-name` for a
+/// path (the shell's own way out), since this parser has no `--opt=value` form.
+fn value(a: &str, next: Option<&String>) -> Result<String, String> {
+    match next {
+        None => Err(format!("{a} needs a value")),
+        // A negative number is a value; anything else that starts with `-` is another option.
+        // `-inf` and `-nan` parse as numbers too, so a bad `--scale` still reaches the check that
+        // reports it rather than being called an option.
+        Some(v) if v.starts_with('-') && v.len() > 1 && v.parse::<f64>().is_err() => {
+            Err(format!("{a} needs a value and `{v}` is another option; if you did mean that name, write `./{v}`"))
+        }
+        Some(v) => Ok(v.clone()),
+    }
+}
+
+/// The usage lines for one subcommand, for `<sub> --help`. Each line of [`USAGE`] names its
+/// subcommand, and the indented lines after it belong to it.
+fn usage_for(sub: &str) -> String {
+    let mut out = Vec::new();
+    let mut keep = false;
+    for line in USAGE.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("usage: designcraft-cli ").or_else(|| trimmed.strip_prefix("designcraft-cli ")) {
+            keep = rest.split_whitespace().next() == Some(sub);
+        }
+        if keep {
+            out.push(line);
+        }
+    }
+    if out.is_empty() { USAGE.to_string() } else { out.join("\n") }
+}
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `std::env::args` panics on an argument that is not UTF-8 ("called `Result::unwrap()` on an
+    // `Err` value"), which a Latin-1 file name on Linux or macOS is. Such a name cannot be passed
+    // through to the engine, whose paths are `str`, so it is a usage error here rather than a
+    // crash (photocraft#1108).
+    let mut args: Vec<String> = Vec::new();
+    for arg in std::env::args_os().skip(1) {
+        match arg.into_string() {
+            Ok(a) => args.push(a),
+            Err(bad) => {
+                eprintln!("designcraft-cli: `{}` is not valid UTF-8, so it cannot be used as an argument", bad.to_string_lossy());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    // `<sub> --help` asks about that subcommand, which every parser but `script`'s read as an
+    // unknown option (photocraft#423). It goes to stdout and succeeds, as `--help` does.
+    if let Some(sub) = args.first().map(String::as_str)
+        && !matches!(sub, "--help" | "-h" | "help" | "script")
+        && args[1..].iter().any(|a| a == "--help" || a == "-h")
+    {
+        outln!("{}", usage_for(sub));
+        return ExitCode::SUCCESS;
+    }
     match args.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {
             outln!("designcraft-cli {}", env!("CARGO_PKG_VERSION"));
@@ -302,7 +357,7 @@ fn run(args: &[String]) -> Result<(), String> {
     // Earlier --cmd results, for `$N.path` references.
     let mut results: Vec<Value> = Vec::new();
     while let Some(a) = it.next() {
-        let mut val = || it.next().cloned().ok_or_else(|| format!("{a} needs a value"));
+        let mut val = || value(a, it.next());
         match a.as_str() {
             "--in" => {
                 let p = val()?;
@@ -439,7 +494,7 @@ fn script(args: &[String]) -> Result<(), String> {
     let mut keep_going = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        let mut val = || it.next().cloned().ok_or_else(|| format!("{a} needs a value"));
+        let mut val = || value(a, it.next());
         match a.as_str() {
             "--in" => {
                 let p = val()?;
@@ -530,8 +585,8 @@ fn app(args: &[String]) -> Result<(), String> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--port" | "--connect" => port = it.next().cloned().ok_or("--port needs a value")?,
-            "--method" => method = Some(it.next().cloned().ok_or("--method needs a value")?),
+            "--port" | "--connect" => port = value(a, it.next())?,
+            "--method" => method = Some(value(a, it.next())?),
             _ => rest.push(a.clone()),
         }
     }
