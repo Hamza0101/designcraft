@@ -507,6 +507,29 @@ fn files_written_are_reported_on_stdout_as_json() {
     assert!(cmd_pdf.is_file());
     assert!(String::from_utf8_lossy(&out.stderr).lines().any(|l| l.starts_with("wrote ")), "and a human line on stderr");
 
+    // The last line shape: an export that runs a command for the file type (.html, .rtf, .txt,
+    // .idml, .epub). Those report bytes and the warnings the export gives -- an EPUB or HTML
+    // export says what it left out -- and nothing else (#1304 review).
+    // `.rtf` and `.txt` go through `file.exportText`, which needs a text target ("edit text or
+    // select a text frame"), so they are not reachable from a bare `run --sample`.
+    for name in ["out.html", "out.idml", "out.epub"] {
+        let file = dir.join(name);
+        let out = cli().args(["run", "--sample", "--export", file.to_str().unwrap()]).output().unwrap();
+        assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let line: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{name}: {stdout:?}: {e}"));
+        assert_eq!(line["wrote"].as_str(), Some(file.to_string_lossy().as_ref()), "{name}: {line}");
+        assert!(line["bytes"].as_u64().is_some_and(|b| b > 0), "{name}: {line}");
+        // `warnings` is an array whichever way the command answers: the HTML and EPUB exports
+        // report what they left out, the text export reports nothing at all.
+        assert!(line["warnings"].is_array(), "{name}: {line}");
+        assert!(file.is_file(), "{name} exists");
+        // And the human line is still the one on stderr.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.lines().any(|l| l.starts_with("wrote ")), "{name}: {stderr:?}");
+        assert!(!stderr.lines().any(|l| l.starts_with('{')), "{name}: stderr carries no JSON: {stderr:?}");
+    }
+
     // A command that writes a whole folder answers with the files it wrote, not one path, and
     // every one of them is reported (#1304 review).
     let pkg = dir.join("pkg");
