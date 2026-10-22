@@ -1089,9 +1089,14 @@ fn slot_can_show(painter: &egui::Painter, xf: &Xf, slot: &SpreadSlot) -> bool {
 /// [`slot_can_show`] against a clip rectangle given directly, so the geometry can be tested
 /// without a painter.
 fn slot_in_clip(xf: &Xf, slot: &SpreadSlot, clip: Rect) -> bool {
-    // A hair of slack, so an edge exactly on the boundary is not cut.
-    xf.rect(slot.reach).expand(2.0).intersects(clip)
+    xf.rect(slot.reach).expand(SLOT_SLACK_PX).intersects(clip)
 }
+
+/// How far the overlays reach outside a slot's own extent, in screen pixels: half the port square,
+/// which is centred on a frame's out port and so hangs that far past the frame, plus a hair so an
+/// edge exactly on the clip boundary is not cut. The overset mark is drawn at that size whatever
+/// the zoom, so the slack is in screen pixels and does not scale (#1370 review).
+const SLOT_SLACK_PX: f32 = designcraft_tools::thread::PORT_SIZE_PX as f32 / 2.0 + 2.0;
 
 fn draw_frames(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Document, layout: &CanvasLayout) {
     if !app.ui.frame_edges {
@@ -3050,6 +3055,38 @@ mod tests {
         let far = super::Xf { origin: designcraft_geom::Point::new(last.x0, last.y0), ..xf };
         assert!(!super::slot_in_clip(&far, &layout.slots[0], view), "the first spread is off screen");
         assert!(super::slot_in_clip(&far, &layout.slots[layout.slots.len() - 1], view), "the last spread is on screen");
+    }
+
+    /// The overset mark is a port-sized square **centred** on a frame's out port, so it hangs half
+    /// its size past the frame -- and past the slot's own reach. Culling with 2 px of slack cut up
+    /// to 4.25 px of it: a slot whose only pixels in view were that half-square was skipped and
+    /// the mark went missing (#1370 review).
+    #[test]
+    fn the_cull_covers_the_overset_mark_hanging_off_a_slot() {
+        let half = designcraft_tools::thread::PORT_SIZE_PX as f32 / 2.0;
+        assert!(super::SLOT_SLACK_PX >= half, "the slack covers the mark: {} vs {half}", super::SLOT_SLACK_PX);
+
+        // A slot one unit wide at zoom 1, and a view that begins just past its right edge: only
+        // the mark's outer half can reach into it.
+        let doc = designcraft_doc::Document::new(&designcraft_doc::build::NewDocument::default());
+        let layout = designcraft_tools::CanvasLayout::new(&doc, false);
+        let slot = &layout.slots[0];
+        let view = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0));
+        let xf =
+            super::Xf { min: view.min, origin: designcraft_geom::Point::new(slot.reach.x0, slot.reach.y0), zoom: 1.0, rot: 0, pivot: view.center() };
+        let right = super::slot_in_clip(&xf, slot, view);
+        assert!(right, "the slot itself is in view");
+
+        // Slide the view right so the slot's reach ends `gap` px before it: anything up to half a
+        // mark away must still count as showing.
+        let reach = xf.rect(slot.reach);
+        for gap in [0.0f32, 1.0, half - 0.5] {
+            let just_past = egui::Rect::from_min_size(egui::pos2(reach.max.x + gap, view.min.y), view.size());
+            assert!(super::slot_in_clip(&xf, slot, just_past), "a mark {gap} px past the reach is still drawn (slack {})", super::SLOT_SLACK_PX);
+        }
+        // Well clear of the mark, the slot is culled as before.
+        let clear = egui::Rect::from_min_size(egui::pos2(reach.max.x + super::SLOT_SLACK_PX + 1.0, view.min.y), view.size());
+        assert!(!super::slot_in_clip(&xf, slot, clear), "a slot with nothing in view, not even its mark, is culled");
     }
 
     use super::*;
