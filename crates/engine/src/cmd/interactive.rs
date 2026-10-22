@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "hyperlink.list", "Hyperlinks", [], None, "{}", has_doc, |s, _| Ok(serde_json::to_value(&s.doc()?.doc.hyperlinks).unwrap_or_default())),
         cmd!("hyperlink.edit", "Hyperlink Options…", [], None, "{id, name?, url? | email? | page? (1-based) | anchor?}", has_doc, |s, p| {
             let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad("hyperlink.edit", "missing id"))?;
-            let dest = dest_param(&s.doc()?.doc, p);
+            let dest = dest_param("hyperlink.edit", &s.doc()?.doc, p)?;
             let name = str_param(p, "name").map(str::to_string);
             s.edit(|d, _| {
                 let h = d.hyperlinks.iter_mut().find(|h| h.id == id).ok_or_else(|| bad("hyperlink.edit", format!("no hyperlink {id}")))?;
@@ -90,17 +90,34 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// `url`, `email`, `page` (1-based) or `anchor` (a text anchor's id, or its name).
-fn dest_param(d: &designcraft_doc::Document, p: &Value) -> Option<HyperlinkDest> {
+/// `url`, `email`, `page` (1-based) or `anchor` (a text anchor's id, or its name). `None` when
+/// none of them is given; an error when one is given and cannot be used, which `page 0` and a
+/// page past the end both were — they became page 1 and a link the export then left out.
+fn dest_param(id: &str, d: &designcraft_doc::Document, p: &Value) -> Result<Option<HyperlinkDest>> {
     if let Some(u) = str_param(p, "url") {
-        Some(HyperlinkDest::Url(u.to_string()))
-    } else if let Some(e) = str_param(p, "email") {
-        Some(HyperlinkDest::Email(e.to_string()))
-    } else if let Some(a) = p.get("anchor").filter(|a| !a.is_null()) {
+        return Ok(Some(HyperlinkDest::Url(u.to_string())));
+    }
+    if let Some(e) = str_param(p, "email") {
+        return Ok(Some(HyperlinkDest::Email(e.to_string())));
+    }
+    if let Some(a) = p.get("anchor").filter(|a| !a.is_null()) {
         let by_name = |name: &str| d.stories.values().flat_map(|st| st.anchors.iter()).find(|x| x.name == name).map(|x| x.id);
-        a.as_u64().or_else(|| a.as_str().and_then(by_name)).map(HyperlinkDest::Anchor)
-    } else {
-        p.get("page").and_then(Value::as_u64).map(|pg| HyperlinkDest::Page((pg as usize).saturating_sub(1)))
+        let found =
+            a.as_u64().filter(|id| d.stories.values().any(|st| st.anchors.iter().any(|x| x.id == *id))).or_else(|| a.as_str().and_then(by_name));
+        return match found {
+            Some(anchor) => Ok(Some(HyperlinkDest::Anchor(anchor))),
+            None => Err(bad(id, format!("no text anchor {a} (anchor.list names them)"))),
+        };
+    }
+    match p.get("page").filter(|v| !v.is_null()) {
+        None => Ok(None),
+        Some(pg) => {
+            let pages = d.page_count();
+            match pg.as_u64().map(|n| n as usize) {
+                Some(n) if n >= 1 && n <= pages => Ok(Some(HyperlinkDest::Page(n - 1))),
+                _ => Err(bad(id, format!("page {pg}: the document has {pages} page(s), numbered from 1"))),
+            }
+        }
     }
 }
 
@@ -116,7 +133,7 @@ fn dest_label(d: &designcraft_doc::Document, dest: &HyperlinkDest) -> String {
 
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.doc()?;
-    let dest = dest_param(&st.doc, p).ok_or_else(|| bad("hyperlink.create", "give `url`, `email`, `page` or `anchor`"))?;
+    let dest = dest_param("hyperlink.create", &st.doc, p)?.ok_or_else(|| bad("hyperlink.create", "give `url`, `email`, `page` or `anchor`"))?;
     let sources: Vec<HyperlinkSource> = if let Some(ids) = super::ids_param(p, "ids") {
         ids.into_iter().map(|id| HyperlinkSource::Item { id }).collect()
     } else if let Some(t) = st.selection.text.filter(|t| !t.is_caret()) {
@@ -227,6 +244,29 @@ mod anchor_dest_tests {
         s.execute("layout.pages.insert", &json!({"count": 1, "after": 0})).unwrap();
         assert_eq!(s.execute("anchor.list", &json!({})).unwrap()[0]["page"], "4");
         assert_eq!(link_pages(&mut s), vec![3], "the link follows the text");
+
+        // A page number the document does not have is refused, rather than becoming page 1 or a
+        // link the export quietly leaves out.
+        let dest_err = |s: &mut Session, dest: serde_json::Value| {
+            let mut params = dest;
+            params["ids"] = json!([thumb["id"].clone()]);
+            s.execute("hyperlink.create", &params).expect_err("refused").to_string()
+        };
+        for (params, wanted) in [
+            (json!({"page": 0}), "numbered from 1"),
+            (json!({"page": 99}), "the document has 4 page(s)"),
+            (json!({"anchor": 12345}), "no text anchor"),
+            (json!({"anchor": "No Such Anchor"}), "no text anchor"),
+        ] {
+            let e = dest_err(&mut s, params.clone());
+            assert!(e.contains(wanted), "{params}: {e}");
+        }
+        // The pages it does have still work, 1-based.
+        let made = s.execute("hyperlink.create", &json!({"page": 4, "ids": [thumb["id"].clone()]})).unwrap()["ids"][0].clone();
+        let links = s.execute("hyperlink.list", &json!({})).unwrap();
+        let link = links.as_array().unwrap().iter().find(|h| h["id"] == made).expect("the new link");
+        assert_eq!(link["dest"], json!({"kind": "page", "value": 3}), "page 4 is index 3");
+        s.execute("hyperlink.delete", &json!({"id": made})).unwrap();
 
         // An anchor's id works as well as its name, and an unknown name is refused.
         s.execute("hyperlink.delete", &json!({"id": links[0]["id"].clone()})).unwrap();
