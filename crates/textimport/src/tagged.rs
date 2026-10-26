@@ -56,9 +56,18 @@ fn unescape_value(v: &str) -> String {
     out
 }
 
+/// The first format version whose `cFont` and `cTypeface` values are escaped like style names.
+/// Older files hold them raw, so a backslash in them is literal.
+const ESCAPED_FONTS_VERSION: u32 = 8;
+
+/// A `cFont` or `cTypeface` value: decoded in files that escape it, literal in older ones.
+fn font_value(v: &str, escaped: bool) -> String {
+    if escaped { unescape_value(v) } else { v.to_string() }
+}
+
 /// `story` as Tagged Text.
 pub fn tagged_text(doc: &Document, story: &Story) -> String {
-    let mut out = String::from("<ASCII-WIN>\r\n<Version:7>\r\n");
+    let mut out = String::from("<ASCII-WIN>\r\n<Version:8>\r\n");
     let ranges = story.para_ranges();
     for (i, r) in ranges.iter().enumerate() {
         if i > 0 {
@@ -80,11 +89,11 @@ pub fn tagged_text(doc: &Document, story: &Story) -> String {
                 open.push("CharStyle");
             }
             if let Some(v) = &f.over.font_family {
-                let _ = write!(out, "<cFont:{v}>");
+                let _ = write!(out, "<cFont:{}>", escape_value(v));
                 open.push("cFont");
             }
             if let Some(v) = &f.over.font_style {
-                let _ = write!(out, "<cTypeface:{v}>");
+                let _ = write!(out, "<cTypeface:{}>", escape_value(v));
                 open.push("cTypeface");
             }
             if let Some(v) = f.over.size {
@@ -142,6 +151,7 @@ pub fn import(bytes: &[u8]) -> Result<Imported, ImportError> {
             _ => runs.push((c.to_string(), fmt.clone())),
         }
     };
+    let mut escaped_fonts = false;
     let mut units = crate::Utf16Units::default();
     let mut i = 0;
     let mut skipped = 0;
@@ -199,8 +209,8 @@ pub fn import(bytes: &[u8]) -> Result<Imported, ImportError> {
                             char_styles.push(v);
                         }
                     }
-                    "cFont" => fmt.over.font_family = (!value.is_empty()).then(|| value.to_string()),
-                    "cTypeface" => fmt.over.font_style = (!value.is_empty()).then(|| value.to_string()),
+                    "cFont" => fmt.over.font_family = (!value.is_empty()).then(|| font_value(value, escaped_fonts)),
+                    "cTypeface" => fmt.over.font_style = (!value.is_empty()).then(|| font_value(value, escaped_fonts)),
                     // A size the engine cannot mean (0, negative, 1e300) is dropped, so the text
                     // keeps its style's size (#1593).
                     "cSize" => fmt.over.size = value.trim().parse().ok().and_then(designcraft_doc::attrs::imported_type_size),
@@ -211,7 +221,8 @@ pub fn import(bytes: &[u8]) -> Result<Imported, ImportError> {
                             list.push(nm);
                         }
                     }
-                    n if n.starts_with("ASCII-") || n.starts_with("UNICODE-") || n.starts_with("ANSI-") || n == "Version" => {}
+                    "Version" => escaped_fonts = value.trim().parse::<u32>().is_ok_and(|v| v >= ESCAPED_FONTS_VERSION),
+                    n if n.starts_with("ASCII-") || n.starts_with("UNICODE-") || n.starts_with("ANSI-") => {}
                     _ => skipped += 1,
                 }
             }
@@ -336,6 +347,31 @@ mod tests {
             assert_eq!(back.para_styles.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), [name]);
             assert_eq!(back.char_styles.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), [name]);
         }
+    }
+
+    #[test]
+    fn font_values_with_tag_characters_round_trip() {
+        let doc = Document::new(&designcraft_doc::build::NewDocument::default());
+        for name in ["Weird>Font", "A<b>c", "x\\y", "end\\"] {
+            let mut story = Story::new(StoryId(0));
+            let mut f = CharFormat::default();
+            f.over.font_family = Some(name.into());
+            f.over.font_style = Some(name.into());
+            story.insert_with(0, "hello", f);
+            let out = tagged_text(&doc, &story);
+            let back = import(out.as_bytes()).unwrap();
+            assert_eq!(back.story.text, "hello", "{out}");
+            assert_eq!(back.story.char_format_at(1).over.font_family.as_deref(), Some(name), "{out}");
+            assert_eq!(back.story.char_format_at(1).over.font_style.as_deref(), Some(name), "{out}");
+        }
+    }
+
+    /// Version 7 files hold font values raw, so their backslashes stay literal.
+    #[test]
+    fn old_format_font_values_stay_literal() {
+        let i = import("<ASCII-WIN>\r\n<Version:7>\r\n<ParaStyle:Body><cFont:a\\b>x<cFont:><cTypeface:c\\d>y".as_bytes()).unwrap();
+        assert_eq!(i.story.char_format_at(1).over.font_family.as_deref(), Some("a\\b"));
+        assert_eq!(i.story.char_format_at(2).over.font_style.as_deref(), Some("c\\d"));
     }
 
     /// A backslash that isn't one of our escapes (older files, InDesign's `\:`) stays literal.
