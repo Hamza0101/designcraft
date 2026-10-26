@@ -623,8 +623,15 @@ fn column_rules_are_drawn() {
         o.inset = [0.0; 4];
         o.column_rule = on;
         o.column_rule_weight = 2.0;
+        // The rules run from the top line's ascent to the bottom line's descent, not the 264 pt
+        // of the columns.
+        let sid = *d.stories.keys().next().unwrap();
+        let cs = designcraft_compose::compose_story(&d, sid, &designcraft_compose::ComposeOptions::default());
+        let line = &cs.frames[0].lines[0];
+        let depth = line.ascent + line.descent;
+        assert!(cs.frames[0].lines.len() == 1 && depth < 264.0 - 1.0, "{depth}");
         let (_, paths) = drawn(&export_pdf(&d, &Cache::new(), &PdfOptions::default()).unwrap());
-        paths.into_iter().filter(|r| (r.width() - 2.0).abs() < 0.01 && (r.height() - 264.0).abs() < 0.01).map(|r| r.center().x).collect::<Vec<_>>()
+        paths.into_iter().filter(|r| (r.width() - 2.0).abs() < 0.01 && (r.height() - depth).abs() < 0.01).map(|r| r.center().x).collect::<Vec<_>>()
     };
     // 540 pt wide in three columns with 12 pt gutters: columns of 172 pt from x 36.
     let xs = rules(true);
