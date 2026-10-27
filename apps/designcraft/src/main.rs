@@ -16,6 +16,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+mod control_token;
 mod gpu;
 mod gpu_limits;
 mod logging;
@@ -575,8 +576,26 @@ fn main() -> std::process::ExitCode {
                 app.integrated_titlebar = cfg!(target_os = "macos");
                 app.custom_titlebar = cfg!(target_os = "windows");
                 if let Some(port) = control_port {
-                    let rx = control_server::start(port, cc.egui_ctx.clone());
-                    app = app.with_control(rx);
+                    // The channel reaches every command, so it opens only with a token a client
+                    // has to read from the profile directory (#1585). Without a random source
+                    // there is no token, and the channel does not open at all: starting it
+                    // unauthenticated would be the thing the token is for.
+                    match control_token::new_token() {
+                        Some(token) => {
+                            match profile::config_dir().map(|dir| control_token::write_token(&dir, &token)) {
+                                Some(Ok(path)) => eprintln!("designcraft: the control token is in {}", path.display()),
+                                Some(Err(e)) => {
+                                    eprintln!("designcraft: the control token could not be written: {e} (pass it with {})", control_token::TOKEN_ENV)
+                                }
+                                None => {
+                                    eprintln!("designcraft: no profile directory for the control token (pass it with {})", control_token::TOKEN_ENV)
+                                }
+                            }
+                            let rx = control_server::start(port, token, cc.egui_ctx.clone());
+                            app = app.with_control(rx);
+                        }
+                        None => eprintln!("designcraft: the control server did not start: no random source for its token"),
+                    }
                 }
                 if sample {
                     let _ = app.run("file.newSample", serde_json::json!({}));
