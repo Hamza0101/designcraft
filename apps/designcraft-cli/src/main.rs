@@ -124,7 +124,11 @@ fn can_be_value(v: &str) -> bool {
 
 /// The usage lines for one subcommand, for `<sub> --help`. Each line of [`USAGE`] names its
 /// subcommand, and the indented lines after it belong to it.
-fn usage_for(sub: &str) -> String {
+/// The part of [`USAGE`] that describes `sub`, or `None` when it describes no such subcommand --
+/// which is how `<sub> --help` tells a real subcommand from a typo. Falling back to the whole
+/// usage made `bogus --help` print it and succeed, bypassing the unknown-command failure (noted
+/// in review).
+fn usage_for(sub: &str) -> Option<String> {
     let mut out = Vec::new();
     let mut keep = false;
     for line in USAGE.lines() {
@@ -136,7 +140,7 @@ fn usage_for(sub: &str) -> String {
             out.push(line);
         }
     }
-    if out.is_empty() { USAGE.to_string() } else { out.join("\n") }
+    (!out.is_empty()).then(|| out.join("\n"))
 }
 
 fn main() -> ExitCode {
@@ -159,8 +163,9 @@ fn main() -> ExitCode {
     if let Some(sub) = args.first().map(String::as_str)
         && !matches!(sub, "--help" | "-h" | "help" | "script")
         && args[1..].iter().any(|a| a == "--help" || a == "-h")
+        && let Some(text) = usage_for(sub)
     {
-        outln!("{}", usage_for(sub));
+        outln!("{text}");
         return ExitCode::SUCCESS;
     }
     match args.first().map(String::as_str) {
