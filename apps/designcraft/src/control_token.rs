@@ -45,6 +45,14 @@ pub fn write_token(config_dir: &Path, token: &str) -> std::io::Result<PathBuf> {
         options.mode(0o600);
     }
     let mut file = options.open(&path)?;
+    // `mode` applies only where `open` creates the file, so a token file left behind by an
+    // earlier run keeps whatever mode it had. Narrowed on the handle while it is still empty,
+    // so the token is never in a file others can read (noted in review).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     file.write_all(token.as_bytes())?;
     file.flush()?;
     Ok(path)
@@ -100,6 +108,31 @@ mod tests {
         let next = new_token().unwrap();
         write_token(&dir, &next).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), next);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `OpenOptionsExt::mode` applies only where `open` creates the file, so a token file an
+    /// earlier run left world-readable kept that mode and the next token went into it (noted in
+    /// review).
+    #[cfg(unix)]
+    #[test]
+    fn a_token_file_left_readable_by_others_is_narrowed_before_the_token_goes_in() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dc-token-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A file from an earlier run that anyone can read.
+        let path = dir.join(TOKEN_FILE);
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644, "the file starts wide open");
+
+        let token = new_token().unwrap();
+        assert_eq!(write_token(&dir, &token).unwrap(), path);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the token is not left in a file others can read: {mode:o}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), token);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
