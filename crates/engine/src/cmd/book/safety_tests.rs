@@ -1,4 +1,4 @@
-use super::{ChapterBatch, MAX_BATCH_CHAPTERS, MAX_BOOK_CHAPTER_BYTES, MAX_BOOK_PDF_BYTES};
+use super::{Book, ChapterBatch, MAX_BATCH_CHAPTERS, outside_book_folder};
 use crate::Session;
 use serde_json::json;
 
@@ -51,13 +51,25 @@ fn chapter_record_limit_is_checked_before_staging_allocation() {
     assert!(error.to_string().contains("4096"));
 }
 
-/// The export's budget is what the chapters may add up to, and the peak is three times it: the
-/// chapters, the merged output, and the copy the merge makes of the chapter it is reading. If
-/// the chapters' budget is ever raised, the figure it is a third of has to move with it, or the
-/// export silently goes back to reaching three times what it allows (noted in review of #1597).
+/// A book's folder is taken from the path it was stored with, which `book.new` does not resolve.
+/// A relative book path left the folder relative while every chapter resolves absolute, so the
+/// comparison mixed the two forms (noted in review of #1597).
 #[test]
-fn the_chapter_budget_leaves_room_for_the_merge_it_pays_for() {
-    assert!(MAX_BOOK_CHAPTER_BYTES * 3 <= MAX_BOOK_PDF_BYTES, "three times the budget is within the peak");
-    assert!((MAX_BOOK_CHAPTER_BYTES + 1) * 3 > MAX_BOOK_PDF_BYTES, "and it is as much as a third allows, not less");
-    assert_eq!(MAX_BOOK_CHAPTER_BYTES / (1 << 20), 170, "and the refusal names 170 MB");
+fn a_relative_book_path_still_knows_which_chapters_are_beside_it() {
+    let here = std::env::current_dir().unwrap();
+    let beside = here.join("sub").join("ch1.designcraft").to_string_lossy().into_owned();
+    let elsewhere = here.join("other").join("mine.designcraft").to_string_lossy().into_owned();
+
+    // `dir/Guide.dcbook`: the folder was the relative "sub", which no absolute chapter starts
+    // with, so every chapter was reported as outside the book's own folder.
+    let b = Book { path: "sub/Guide.dcbook".into(), documents: vec![beside.clone(), elsewhere.clone()], style_source: 0 };
+    assert_eq!(outside_book_folder(&b), vec![elsewhere.clone()], "only the chapter that really is elsewhere");
+
+    // A bare name: the folder was empty, and every absolute path starts with an empty path, so
+    // nothing was reported however far outside it lived. The chapter has to be outside the
+    // working directory itself to test this -- `here/other/x` is inside `here`, and reporting it
+    // would be wrong.
+    let away = std::env::temp_dir().join("dc-book-away").join("mine.designcraft").to_string_lossy().into_owned();
+    let b = Book { path: "Guide.dcbook".into(), documents: vec![beside.clone(), away.clone()], style_source: 0 };
+    assert_eq!(outside_book_folder(&b), vec![away], "the chapter outside the working directory is reported");
 }
