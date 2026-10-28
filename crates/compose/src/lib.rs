@@ -1163,7 +1163,14 @@ fn compose_with_db(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &C
                 };
                 apply_desired_spacing(&mut gl, &pp);
                 mojikumi::apply(&mut gl, &doc.styles, &pp.mojikumi);
-                let mut hy = hyphenation_points(&story.text, &gl, &pp, &hyph_exceptions, &foreign_ranges(doc, story, prange.clone(), &base_chars));
+                let mut hy = hyphenation_points(
+                    &story.text,
+                    prange.clone(),
+                    &gl,
+                    &pp,
+                    &hyph_exceptions,
+                    &foreign_ranges(doc, story, prange.clone(), &base_chars),
+                );
                 suppress_hyphens(&mut hy, &gl, no_hyph.get(pi).map_or(&[], Vec::as_slice));
                 let breaks = if pp.composer.single_line() || gl.iter().any(|g| g.ch == '\t') || gl.len() > 4000 {
                     let tab = |j: usize, x: f64, i: usize| {
@@ -1300,7 +1307,7 @@ fn compose_with_db(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &C
         apply_desired_spacing(&mut glyphs, &pp);
         mojikumi::apply(&mut glyphs, &doc.styles, &pp.mojikumi);
         let mut hyph_after =
-            hyphenation_points(&story.text, &glyphs, &pp, &hyph_exceptions, &foreign_ranges(doc, story, prange.clone(), &base_chars));
+            hyphenation_points(&story.text, prange.clone(), &glyphs, &pp, &hyph_exceptions, &foreign_ranges(doc, story, prange.clone(), &base_chars));
         suppress_hyphens(&mut hyph_after, &glyphs, no_hyph.get(pi).map_or(&[], Vec::as_slice));
         let base_size = base_chars.size;
         let spacing = spacing_for(&pp, base_size, story);
@@ -4183,6 +4190,7 @@ fn suppress_hyphens(hy: &mut [bool], glyphs: &[Glyph], at: &[usize]) {
 
 fn hyphenation_points(
     text: &str,
+    para: Range<usize>,
     glyphs: &[Glyph],
     pp: &ParaProps,
     exceptions: &HashMap<String, Vec<usize>>,
@@ -4195,7 +4203,12 @@ fn hyphenation_points(
     // Korean is set word by word and is not hyphenated (KLREQ). An ordinary Korean document
     // leaves the paragraph language at the default English, so the paragraph's own text decides
     // rather than its language setting (#1688).
-    if hyphen::mostly_hangul(text) {
+    //
+    // This paragraph's text, not the whole story's: judging the story would have turned
+    // hyphenation off in the English paragraphs of a Korean document, and left it on in the
+    // Korean paragraphs of a mostly-English one (noted in review). The glyphs carry offsets
+    // into the whole story, which is why `text` stays the story's.
+    if hyphen::mostly_hangul(text.get(para).unwrap_or(text)) {
         return out;
     }
     let lim = hyphen::Limits {

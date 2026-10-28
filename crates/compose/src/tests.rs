@@ -994,6 +994,31 @@ fn hyphen_limit_is_a_hard_constraint() {
     }
 }
 
+/// Each paragraph's own text decides, not the story's: a Korean document's English paragraphs
+/// still hyphenate, and a mostly-English story's Korean paragraphs still do not (noted in review
+/// of #1688).
+#[test]
+fn hyphenation_follows_each_paragraph_not_the_story() {
+    let rect = Rect::new(0.0, 0.0, 90.0, 100_000.0);
+    let para = ParaAttrs { align: Some(Align::LeftJustified), hyphenate: Some(true), ..Default::default() };
+    // 이번 통지문은 아래와 같습니다 / an English paragraph that wants hyphenation
+    let korean = "\u{C774}\u{BC88} \u{D1B5}\u{C9C0}\u{BB38}\u{C740} \u{C544}\u{B798}\u{C640} \u{AC19}\u{C2B5}\u{B2C8}\u{B2E4}";
+    let english = "This notice about hyphenation and composition continues for a while in English";
+    let hyphens = |text: &str| {
+        let (d, sid, _) = doc_with(text, rect, para.clone());
+        let cs = compose_story(&d, sid, &ComposeOptions::default());
+        let lines = all_lines(&cs);
+        // Which paragraph each hyphenated line belongs to: the Korean one is first.
+        lines.iter().filter(|l| l.hyphenated).count()
+    };
+    // The English paragraph in a Korean document still hyphenates: the story is mostly Hangul,
+    // but that paragraph is not.
+    let mixed = format!("{korean}\n{english}");
+    assert!(hyphens(&mixed) > 0, "the English paragraph of a Korean document still hyphenates");
+    // And the Korean paragraph alone invents none.
+    assert_eq!(hyphens(korean), 0, "a Korean paragraph invents no hyphens");
+}
+
 /// A Korean notice leaves its paragraphs at the default English language, so English
 /// hyphenation broke the Latin words Korean particles attach to and the addresses such a document
 /// is full of: `New-` / `s와`, `library.exam-` / `ple.kr` (#1688). The lines may now be looser --

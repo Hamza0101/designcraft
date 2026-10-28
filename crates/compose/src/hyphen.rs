@@ -212,17 +212,29 @@ pub fn word_breaks_in(word: &str, lang: Lang) -> (Vec<usize>, Source) {
 pub fn keep_whole(token: &str) -> bool {
     let cjk = |c: char| {
         matches!(c as u32,
-            0xAC00..=0xD7A3     // Hangul syllables
-            | 0x1100..=0x11FF   // Hangul Jamo
-            | 0x3130..=0x318F   // Hangul compatibility Jamo
-            | 0x3040..=0x30FF   // kana
-            | 0x4E00..=0x9FFF   // CJK unified ideographs
+            0xAC00..=0xD7A3       // Hangul syllables
+            | 0x1100..=0x11FF     // Hangul Jamo
+            | 0x3130..=0x318F     // Hangul compatibility Jamo
+            | 0xA960..=0xA97F     // Hangul Jamo Extended-A
+            | 0xD7B0..=0xD7FF     // Hangul Jamo Extended-B
+            | 0x3040..=0x30FF     // kana
+            | 0xFF66..=0xFF9F     // halfwidth katakana (noted in review)
+            | 0x4E00..=0x9FFF     // CJK unified ideographs
             | 0x3400..=0x4DBF
-            | 0xF900..=0xFAFF)
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x3FFFF) // supplementary ideographs (noted in review)
     };
     if token.chars().any(cjk) {
         return true;
     }
+    // Prose punctuation around a token is not part of the address inside it: `(https://...)` was
+    // not recognised because the bracket came first, and `library.example.kr,` because the comma
+    // ended the last label (noted in review). Only this classification ignores it; the text keeps
+    // every character it had.
+    let wrapper = |c: char| {
+        matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'' | ',' | ';' | ':' | '!' | '?' | '\u{201C}' | '\u{201D}' | '\u{2018}' | '\u{2019}')
+    };
+    let token = token.trim_matches(wrapper).trim_end_matches('.');
     let lower = token.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("ftp://") || lower.starts_with("www.") {
         return true;
@@ -405,6 +417,23 @@ mod tests {
         // Ordinary words, including ones with a hyphen or a full stop, are still hyphenated.
         for t in ["hyphenation", "well-known", "sentence.", "Mr.", "re-examine", "3.5"] {
             assert!(!keep_whole(t), "{t} should not be protected");
+        }
+
+        // An address wrapped in prose punctuation is the same address (noted in review).
+        for t in [
+            "library.example.kr,",
+            "(https://example.kr/page)",
+            "\u{201C}www.example.kr\u{201D}",
+            "mail@example.kr;",
+            "example.kr.",
+            "[https://example.kr]",
+        ] {
+            assert!(keep_whole(t), "{t} should be kept whole");
+        }
+
+        // Halfwidth katakana and a supplementary ideograph are CJK too (noted in review).
+        for t in ["News\u{FF76}", "\u{20B9F}\u{C640}", "x\u{FF9F}"] {
+            assert!(keep_whole(t), "{t:?} should be kept whole");
         }
     }
 
