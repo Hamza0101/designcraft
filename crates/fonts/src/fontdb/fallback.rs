@@ -118,9 +118,9 @@ pub(super) const KOREAN_SANS_FALLBACKS: &[&str] = &[
 pub fn sans_by_name(family: &str) -> Option<bool> {
     let lower = family.to_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|n| lower.contains(n));
-    // Serif first: "Myungjo Gothic" does not exist, but a name holding both reads as the serif
-    // it names, and "Sans" inside "Noto Sans Myungjo" would otherwise win.
-    if has(&["batang", "myungjo", "myeongjo", "gungsuh", "serif", "\u{BC14}\u{D5D5}", "\u{BA85}\u{C870}", "\u{AD81}\u{C11C}"]) {
+    // A Korean serif name comes first: "Myungjo Gothic" does not exist, but a name holding both
+    // reads as the serif it names, and "Sans" inside "Noto Sans Myungjo" would otherwise win.
+    if has(&["batang", "myungjo", "myeongjo", "gungsuh", "\u{BC14}\u{D5D5}", "\u{BA85}\u{C870}", "\u{AD81}\u{C11C}"]) {
         return Some(false);
     }
     if has(&[
@@ -137,6 +137,11 @@ pub fn sans_by_name(family: &str) -> Option<bool> {
         "\u{ADF8}\u{B798}\u{D53D}",
     ]) {
         return Some(true);
+    }
+    // Only now the bare word, which "sans serif" and "sans-serif" end with and do not mean
+    // (noted in review): "Microsoft Sans Serif" is a sans face, and so is the CSS generic.
+    if lower.contains("serif") {
+        return Some(false);
     }
     None
 }

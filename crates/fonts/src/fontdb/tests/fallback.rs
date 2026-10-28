@@ -176,6 +176,26 @@ fn a_korean_family_name_says_sans_or_serif() {
     }
 }
 
+/// "sans serif" ends with the word it is not. The bare "serif" needle matched first, so
+/// "Microsoft Sans Serif" -- and the CSS generic -- classified as serif and a missing Hangul
+/// glyph took the serif-first chain (noted in review of #1692).
+#[test]
+fn a_sans_serif_name_is_not_read_as_serif() {
+    for sans in ["sans-serif", "Microsoft Sans Serif", "MS Sans Serif", "Lucida Sans Serif"] {
+        assert_eq!(sans_by_name(sans), Some(true), "{sans} is sans");
+    }
+    // The bare word still decides a name that holds nothing else.
+    for serif in ["serif", "Source Serif 4", "DejaVu Serif", "Noto Serif KR"] {
+        assert_eq!(sans_by_name(serif), Some(false), "{serif} is serif");
+    }
+    // And a Korean serif name still outranks "Sans", which is why it is tested first of all.
+    assert_eq!(sans_by_name("Noto Sans Myungjo"), Some(false));
+    assert_eq!(sans_by_name("Myungjo Gothic"), Some(false));
+    // Neither word present, so the caller still decides.
+    assert_eq!(sans_by_name("monospace"), None);
+    assert_eq!(sans_by_name("system-ui"), None);
+}
+
 /// The reported bug is the order of the chain: on Windows the first installed entry of the
 /// serif-first chain is Batang, so every missing Dotum face came out serif (#1692).
 #[test]
