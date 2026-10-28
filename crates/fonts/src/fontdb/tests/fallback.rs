@@ -191,6 +191,11 @@ fn a_sans_serif_name_is_not_read_as_serif() {
     // And a Korean serif name still outranks "Sans", which is why it is tested first of all.
     assert_eq!(sans_by_name("Noto Sans Myungjo"), Some(false));
     assert_eq!(sans_by_name("Myungjo Gothic"), Some(false));
+    // And the word outranks every sans indicator: Sweet Gothic Serif is a serif family
+    // whatever "Gothic" suggests (noted in review).
+    for serif in ["Sweet Gothic Serif", "Gothic Serif", "Sans Forgetica Serif"] {
+        assert_eq!(sans_by_name(serif), Some(false), "{serif} names itself serif");
+    }
     // Neither word present, so the caller still decides.
     assert_eq!(sans_by_name("monospace"), None);
     assert_eq!(sans_by_name("system-ui"), None);

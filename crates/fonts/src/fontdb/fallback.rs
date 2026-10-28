@@ -123,6 +123,12 @@ pub fn sans_by_name(family: &str) -> Option<bool> {
     if has(&["batang", "myungjo", "myeongjo", "gungsuh", "\u{BC14}\u{D5D5}", "\u{BA85}\u{C870}", "\u{AD81}\u{C11C}"]) {
         return Some(false);
     }
+    // Then the word itself, which outranks every sans indicator: "Sweet Gothic Serif" is a serif
+    // family whatever "Gothic" suggests. "Sans serif" and "sans-serif" end with the word and do
+    // not mean it, so the phrase goes before the word is looked for (both noted in review).
+    if lower.replace("sans-serif", "sans").replace("sans serif", "sans").contains("serif") {
+        return Some(false);
+    }
     if has(&[
         "dotum",
         "gothic",
@@ -137,11 +143,6 @@ pub fn sans_by_name(family: &str) -> Option<bool> {
         "\u{ADF8}\u{B798}\u{D53D}",
     ]) {
         return Some(true);
-    }
-    // Only now the bare word, which "sans serif" and "sans-serif" end with and do not mean
-    // (noted in review): "Microsoft Sans Serif" is a sans face, and so is the CSS generic.
-    if lower.contains("serif") {
-        return Some(false);
     }
     None
 }
