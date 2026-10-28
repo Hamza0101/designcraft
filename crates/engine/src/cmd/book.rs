@@ -87,6 +87,19 @@ fn load(path: &str) -> Result<designcraft_doc::Document> {
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_BATCH_CHAPTERS: usize = 4096;
 
+/// The PDF a book export may have live at once.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_BOOK_PDF_BYTES: usize = 512 << 20;
+
+/// What the chapters themselves may add up to, which is a third of the peak rather than the
+/// peak. Three things are live at the end of the export: the chapters, held to be merged; the
+/// merged output, which is their total again when they share nothing (measured at 0.97 of the
+/// input for a single chapter); and the copy `merge_pdfs` makes of the chapter it is reading.
+/// The first check counted only the chapters, so the export could reach three times the figure
+/// the refusal named (noted in review).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_BOOK_CHAPTER_BYTES: usize = MAX_BOOK_PDF_BYTES / 3;
+
 /// A batch keeps only bounded path records in memory. Chapter snapshots live in a private
 /// temporary directory; only one document and serialized blob are live while staging.
 #[cfg(not(target_arch = "wasm32"))]
@@ -362,7 +375,6 @@ pub fn specs() -> Vec<CommandSpec> {
             if b.documents.len() > MAX_BATCH_CHAPTERS {
                 return Err(bad("book.exportPdf", format!("a book export supports at most {MAX_BATCH_CHAPTERS} chapters")));
             }
-            const MAX_BOOK_PDF_BYTES: usize = 512 << 20;
             let mut held = 0usize;
             let mut parts = Vec::new();
             for path in &chapters(&b)? {
@@ -374,10 +386,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 let n = designcraft_render::pdf_page_count(&r.bytes).unwrap_or(0);
                 let sizes: Vec<(f32, f32)> = (0..n).filter_map(|i| designcraft_render::pdf_page_size(&r.bytes, i)).map(|(w, h)| (w as f32, h as f32)).collect();
                 held = held.saturating_add(r.bytes.len());
-                if held > MAX_BOOK_PDF_BYTES {
+                // Checked as soon as the chapter is exported. A chapter over the budget on its
+                // own is still generated once before it is refused: the exporter answers with one
+                // buffer, so there is no point before this one at which its size is known.
+                if held > MAX_BOOK_CHAPTER_BYTES {
                     return Err(bad(
                         "book.exportPdf",
-                        format!("the book's chapters are more than {} MB of PDF: export them in parts", MAX_BOOK_PDF_BYTES / (1 << 20)),
+                        format!("the book's chapters are more than {} MB of PDF: export them in parts", MAX_BOOK_CHAPTER_BYTES / (1 << 20)),
                     ));
                 }
                 parts.push((r.bytes, sizes));
