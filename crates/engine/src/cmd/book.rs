@@ -172,7 +172,9 @@ fn writable_chapter(s: &Session, path: &str, command: &'static str) -> Result<()
 fn paginate(s: &Session) -> Result<Value> {
     let b = s.book.as_ref().ok_or_else(no_book)?;
     if b.documents.is_empty() {
-        return Ok(json!({"pages": 0, "chapters": []}));
+        // The same shape as a book with chapters, so a caller reads one field either way
+        // (noted in review).
+        return Ok(json!({"pages": 0, "chapters": [], "outsideFolder": []}));
     }
     let mut batch = ChapterBatch::new(b.documents.len(), "book.paginate")?;
     let mut next = 1u32;
@@ -436,6 +438,12 @@ mod tests {
         s.execute("file.close", &json!({})).unwrap();
         let r = s.execute("book.paginate", &json!({})).unwrap();
         assert_eq!(r["outsideFolder"], json!([]), "nothing to ask about");
+
+        // An empty book answers in the same shape, rather than leaving the field out.
+        let mut s = Session::new();
+        s.execute("book.new", &json!({"path": inside.join("Empty.dcbook").to_string_lossy()})).unwrap();
+        let r = s.execute("book.paginate", &json!({})).unwrap();
+        assert_eq!(r["outsideFolder"], json!([]), "an empty book answers in the same shape");
         let _ = std::fs::remove_dir_all(&root);
     }
 
