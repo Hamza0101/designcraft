@@ -275,8 +275,15 @@ pub fn keep_whole(token: &str) -> bool {
 /// Hangul syllables as Latin letters is treated as Korean however its language is set, since an
 /// ordinary Korean document leaves the paragraph language at the default English (#1688).
 pub fn mostly_hangul(text: &str) -> bool {
+    mostly_hangul_chars(text.chars())
+}
+
+/// [`mostly_hangul`] over characters, for judging the text that is actually set: hidden text has
+/// no glyphs, and counting it let hidden Korean turn hyphenation off for the visible English
+/// around it, and hidden Latin keep it on for visible Korean (noted in review).
+pub fn mostly_hangul_chars(chars: impl Iterator<Item = char>) -> bool {
     let (mut hangul, mut latin) = (0usize, 0usize);
-    for c in text.chars() {
+    for c in chars {
         match c as u32 {
             0xAC00..=0xD7A3 | 0x1100..=0x11FF | 0x3130..=0x318F => hangul += 1,
             _ if c.is_ascii_alphabetic() => latin += 1,

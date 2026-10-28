@@ -1019,6 +1019,38 @@ fn hyphenation_follows_each_paragraph_not_the_story() {
     assert_eq!(hyphens(korean), 0, "a Korean paragraph invents no hyphens");
 }
 
+/// The paragraph's *glyphs* decide, not its source text: hidden conditional text is not set, so
+/// it does not get a vote. Reading the source let hidden Korean turn hyphenation off for the
+/// visible English around it (noted in review of #1688).
+#[test]
+fn hidden_text_does_not_decide_whether_a_paragraph_hyphenates() {
+    let rect = Rect::new(0.0, 0.0, 90.0, 100_000.0);
+    let para = ParaAttrs { align: Some(Align::LeftJustified), hyphenate: Some(true), ..Default::default() };
+    // 이번 통지문은 아래와 같습니다 — repeated, so the Hangul outweighs the English after it
+    // (`mostly_hangul` wants at least as many Hangul characters as ASCII letters).
+    let korean = "\u{C774}\u{BC88} \u{D1B5}\u{C9C0}\u{BB38}\u{C740} \u{C544}\u{B798}\u{C640} \u{AC19}\u{C2B5}\u{B2C8}\u{B2E4} ".repeat(6);
+    let english = "This notice about hyphenation and composition continues for a while in English";
+    let text = format!("{korean}{english}");
+
+    let hyphens = |hide: bool| {
+        let (mut d, sid, _) = doc_with(&text, rect, para.clone());
+        d.conditions.push(designcraft_doc::Condition { name: "Draft".into(), color: [255, 0, 0], visible: !hide });
+        let story = d.story_mut(sid).expect("the story is there");
+        let chars = designcraft_doc::CharAttrs { conditions: Some(vec!["Draft".into()]), ..Default::default() };
+        story.chars = vec![
+            designcraft_doc::CharRun { len: korean.len(), format: designcraft_doc::CharFormat { over: chars, ..Default::default() } },
+            designcraft_doc::CharRun { len: english.len(), format: designcraft_doc::CharFormat::default() },
+        ];
+        let cs = compose_story(&d, sid, &ComposeOptions::default());
+        all_lines(&cs).iter().filter(|l| l.hyphenated).count()
+    };
+
+    // Shown, the Hangul outweighs the English and the paragraph is not hyphenated.
+    assert_eq!(hyphens(false), 0, "a visibly Korean paragraph invents no hyphens");
+    // Hidden, the only text set is English, and it hyphenates like any English paragraph.
+    assert!(hyphens(true) > 0, "hidden Korean does not turn hyphenation off for the visible English");
+}
+
 /// A Korean notice leaves its paragraphs at the default English language, so English
 /// hyphenation broke the Latin words Korean particles attach to and the addresses such a document
 /// is full of: `New-` / `s와`, `library.exam-` / `ple.kr` (#1688). The lines may now be looser --
