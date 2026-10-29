@@ -153,7 +153,9 @@ fn every_subcommand_answers_help_without_running_anything() {
             // None of the work the rest of the line asks for was done.
             assert!(!png.exists(), "{what} exported a file");
             assert!(!out.contains("cannot connect") && !out.contains("render threads"), "{what}: {out:?}");
-            assert!(!out.contains("No such file"), "{what}: {out:?}");
+            // Either operating system's wording, so this catches a file the help path opened on
+            // Windows as well as on unix.
+            assert!(!out.contains("No such file") && !out.contains("cannot find the file"), "{what}: {out:?}");
         }
     }
     // `script`'s own help is longer than one usage line: it documents the script syntax, which is
@@ -193,7 +195,11 @@ fn the_subcommands_that_take_a_word_read_an_unknown_option_as_that_word() {
     assert!(err.contains("no command `--nope`"), "{err:?}");
     // A path nobody has.
     let err = run(&["validate-pdf", "--nope"]).failed("validate-pdf --nope");
-    assert!(err.contains("--nope") && err.contains("No such file"), "{err:?}");
+    // The error names the path. Not the operating system's wording for a missing file: Windows
+    // says "The system cannot find the file specified", so asserting the Unix phrasing failed
+    // there even when the command refused correctly (noted in review). `failed` already checks
+    // the exit code and the stream.
+    assert!(err.contains("--nope"), "{err:?}");
     // A method name for the running app, so the error is about reaching the app.
     let dead = closed_port();
     let err = run(&["app", "--port", &dead, "--nope"]).failed("app --nope");
