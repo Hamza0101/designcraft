@@ -541,6 +541,76 @@ mod overset_tests {
         assert!(story["overset"].is_null() && story["oversetChars"].is_null(), "{story}");
     }
 
+    /// `overset` indexes `text` in UTF-8 bytes, not characters: a client that slices a JavaScript
+    /// string at it cuts the wrong place once the text is not ASCII (noted in review).
+    #[test]
+    fn overset_is_a_byte_offset_into_the_text() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"width": 300, "height": 200, "pages": 1, "facingPages": false, "margins": 0})).unwrap();
+        // Accented letters are two bytes each, so the byte offset runs ahead of the character index.
+        let text = "Réservé à l'évaluation détaillée des éléments.\nCette phrase dépasse le cadre et n'est pas dans le PDF exporté du tout.";
+        let frame = s.execute("frame.create", &json!({"rect": [20, 20, 280, 40], "content": "text", "text": text})).unwrap();
+        let story = s.execute("story.get", &json!({"story": frame["story"].clone()})).unwrap();
+        let at = story["overset"].as_u64().expect("it oversets") as usize;
+        assert!(text.is_char_boundary(at), "a byte offset that splits no character: {at}");
+        assert!(at > text[..at].chars().count(), "ahead of the character index: {at} bytes, {} characters", text[..at].chars().count());
+        // And `oversetChars` counts characters, which is why the two numbers differ.
+        assert_eq!(story["oversetChars"], json!(text[at..].chars().count()), "{story}");
+    }
+
+    /// A parent page's frame is composed once per page that shows it: its page number marker is
+    /// that page's, so the same frame fits on page 1 and oversets on page 10 -- and a parent page
+    /// no exported page uses puts nothing in the file to be missing. Composing it once with no
+    /// page reported neither: every selection got the same unpaged warning (noted in review).
+    #[test]
+    fn a_parent_frame_is_checked_on_the_pages_that_show_it() {
+        let about = |r: &serde_json::Value| -> Vec<String> {
+            r["warnings"]
+                .as_array()
+                .map(|w| w.iter().filter_map(|w| w.as_str()).filter(|w| w.contains("not in the export")).map(str::to_string).collect())
+                .unwrap_or_default()
+        };
+
+        // A parent page that only page 1 uses.
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"width": 300, "height": 200, "pages": 2, "facingPages": false, "margins": 0})).unwrap();
+        s.execute("layout.pages.applyParent", &json!({"pages": [1], "parent": null})).unwrap();
+        let text = "First line is visible.\nSecond paragraph does not fit: this sentence carries the legal notice and must not vanish from the PDF without a warning.";
+        let frame = s
+            .execute("frame.create", &json!({"spread": {"kind": "parent", "index": 0}, "rect": [20, 20, 280, 60], "content": "text", "text": text}))
+            .unwrap();
+        let id = frame["id"].as_u64().unwrap();
+
+        let w = about(&s.execute("file.exportPdf", &json!({"pages": [1]})).unwrap());
+        assert_eq!(w.len(), 1, "page 1 shows the parent: {w:?}");
+        assert!(w[0].contains("page 1") && w[0].contains(&format!("frame {id}")) && w[0].contains("76 character"), "{}", w[0]);
+
+        // Page 2 has no parent, so nothing of that frame is in its export to be missing.
+        let r = s.execute("file.exportPdf", &json!({"pages": [2]})).unwrap();
+        assert!(about(&r).is_empty(), "page 2 does not use the parent: {r}");
+
+        // Page-dependent text: the marker is one digit up to page 9 and two from page 10, and the
+        // wider line no longer fits. 112 pt is the width where that is the only difference.
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"width": 300, "height": 200, "pages": 12, "facingPages": false, "margins": 0})).unwrap();
+        let text = format!("Continued on page {}", designcraft_doc::story::PAGE_NUMBER);
+        s.execute("frame.create", &json!({"spread": {"kind": "parent", "index": 0}, "rect": [20, 20, 132, 36], "content": "text", "text": text}))
+            .unwrap();
+
+        for page in [1, 9] {
+            let r = s.execute("file.exportPdf", &json!({"pages": [page]})).unwrap();
+            assert!(about(&r).is_empty(), "page {page} fits one digit: {r}");
+        }
+        let w = about(&s.execute("file.exportPdf", &json!({"pages": [10]})).unwrap());
+        assert_eq!(w.len(), 1, "two digits do not fit: {w:?}");
+        assert!(w[0].contains("page 10"), "{}", w[0]);
+
+        // The whole document: one line naming every page it happens on, not one line per page.
+        let w = about(&s.execute("file.exportPdf", &json!({})).unwrap());
+        assert_eq!(w.len(), 1, "one line for the story: {w:?}");
+        assert!(w[0].starts_with("pages 10, 11, 12:"), "{}", w[0]);
+    }
+
     /// A spread export puts the whole spread on the sheet, so choosing one page of it exports its
     /// partner too -- and that partner's overset is just as absent from the file. Reporting only
     /// the pages that were named left it unmentioned (noted in review of #1465).

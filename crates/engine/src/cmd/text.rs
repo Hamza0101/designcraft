@@ -191,7 +191,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 })
             }
         ),
-        cmd!(query "story.get", "Get Story", [], None, "{story? | frame?} → text, frames, paragraphs, vertical, lines, overset (the index in `text` where it stops fitting its frames, null when it all fits) and oversetChars (how many characters that leaves, as preflight reports them)", has_doc, |s, p| {
+        cmd!(query "story.get", "Get Story", [], None, "{story? | frame?} → text, frames, paragraphs, vertical, lines, overset (the UTF-8 byte offset into `text` where it stops fitting its frames, not a character index, null when it all fits) and oversetChars (how many characters that leaves, as preflight reports them)", has_doc, |s, p| {
             let st = s.doc()?;
             let sid = story_of(s, p).ok_or_else(|| bad("story.get", "no story"))?;
             let mut v = st.doc.story_summary(sid).ok_or(designcraft_doc::DocError::NoStory(sid))?;
