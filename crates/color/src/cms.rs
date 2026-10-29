@@ -165,38 +165,106 @@ pub struct OutputIntent {
     pub condition: String,
 }
 
+/// Registered characterisation reference names whose spelling in a profile description is the
+/// registry's own: <https://registry.color.org/cmyk-registry/>. FOGRA's data sets run past the
+/// registry -- FOGRA59, the one `eciCMYK v2` names, is not registered -- so a plausible-looking
+/// number is not a registered name and `FOGRA999` never was one.
+///
+/// The registry's names that contain spaces (`CGATS TR 001`, `APTEC Coated CardBoard`) are not
+/// looked for: finding a spaced name inside a free-form description is a different problem, and
+/// not finding one costs only `Custom`, which is what PDF/X asks for when the condition is not
+/// registered.
+const REGISTERED: &[&str] = &[
+    "FOGRA27",
+    "FOGRA28",
+    "FOGRA29",
+    "FOGRA30",
+    "FOGRA31",
+    "FOGRA32",
+    "FOGRA33",
+    "FOGRA34",
+    "FOGRA35",
+    "FOGRA36",
+    "FOGRA37",
+    "FOGRA38",
+    "FOGRA39",
+    "FOGRA40",
+    "FOGRA41",
+    "FOGRA42",
+    "FOGRA43",
+    "FOGRA44",
+    "FOGRA45",
+    "FOGRA46",
+    "FOGRA47",
+    "FOGRA48",
+    "FOGRA49",
+    "FOGRA50",
+    "FOGRA51",
+    "FOGRA52",
+    "FOGRA53",
+    "FOGRA54",
+    "IFRA26",
+    "JCN2002",
+    "JCW2003",
+    "JC200103",
+    "JC200104",
+    "JCS2011",
+    "EUROSB104",
+    "EUROSB204",
+    "APTEC_CTV_3",
+    "APTEC_CTV_4",
+    "APTEC_CTV_5",
+    "APTEC_CTV_6",
+    "APTEC_CTV_7",
+    "APTEC_CTV_8",
+];
+
+/// The CGATS.21-2 reference printing conditions, CRPC1 to CRPC7.
+const CRPCS: usize = 7;
+
 /// The registered characterisation identifier a profile names in its own description, spelled as
 /// the ICC registry spells it.
 ///
-/// A print provider's preflight matches on the identifier, so `Custom` is only right when the
-/// profile names no characterisation: `PSOuncoated_v3_FOGRA52` is FOGRA52 and
-/// `eciCMYK v2 (FOGRA59)` is FOGRA59, and saying `Custom` for those loses the one field the
-/// provider reads (#1475). Nothing is guessed from a profile's other properties — the identifier
-/// has to be in the description, which is where these profiles put it.
+/// A print provider's preflight matches on the registered name, so `Custom` is only right when
+/// the profile names no registered characterisation: `PSOuncoated_v3_FOGRA52` is FOGRA52 and
+/// saying `Custom` for it loses the one field the provider reads (#1475). Nothing is guessed from
+/// a profile's other properties -- the identifier has to be in the description, which is where
+/// these profiles put it -- and nothing is emitted that the registry does not list, under the
+/// spelling the registry uses (noted in review).
 pub fn registered_identifier(description: &str) -> Option<String> {
     // `to_ascii_uppercase` keeps every byte's position, so an offset into `upper` is an offset
-    // into `description` as well. The digits are read from `upper` at that same offset: reading
-    // them from a `Vec<char>` indexed by a byte offset went wrong as soon as anything before the
-    // name was multi-byte -- "Coated (R) FOGRA39" gave FOGRA9 (review of #1475).
+    // into `description` as well. Reading the name from a `Vec<char>` indexed by a byte offset
+    // went wrong as soon as anything before it was multi-byte -- "Coated (R) FOGRA39" gave
+    // FOGRA9 (review of #1475).
     let upper: String = description.to_ascii_uppercase();
-    let bytes = upper.as_bytes();
-    // `FOGRA` or `CGATS21_CRPC` followed by digits, and not inside a longer word.
-    for prefix in ["CGATS21_CRPC", "FOGRA"] {
+    // `name`, somewhere in the description and not inside a longer word. The boundary after it
+    // counts as much as the one before: "FOGRA52extra" names no registered condition, and
+    // answering FOGRA52 for it put a PDF/X identifier on a profile that never claimed one.
+    let names = |name: &str| {
+        let bytes = upper.as_bytes();
         let mut from = 0;
-        while let Some(at) = upper.get(from..).and_then(|s| s.find(prefix)).map(|i| i + from) {
-            from = at + prefix.len();
+        while let Some(at) = upper.get(from..).and_then(|s| s.find(name)).map(|i| i + from) {
+            from = at + name.len();
             let before_is_word = at > 0 && bytes.get(at - 1).is_some_and(|b| b.is_ascii_alphanumeric());
-            let digits: String = upper.get(from..).unwrap_or("").chars().take_while(char::is_ascii_digit).collect();
-            // The boundary after the digits as well as the one before the name: "FOGRA52extra"
-            // named no registered identifier, and answering FOGRA52 for it put a PDF/X
-            // identifier on a profile whose description never claimed one (noted in review).
-            let after_is_word = bytes.get(from + digits.len()).is_some_and(|b| b.is_ascii_alphanumeric());
-            if !before_is_word && !after_is_word && !digits.is_empty() {
-                return Some(format!("{prefix}{digits}"));
+            let after_is_word = bytes.get(from).is_some_and(|b| b.is_ascii_alphanumeric());
+            if !before_is_word && !after_is_word {
+                return true;
             }
         }
+        false
+    };
+    if let Some(name) = REGISTERED.iter().find(|name| names(name)) {
+        return Some((*name).to_string());
     }
-    None
+    // The registry spells these `CGATS21-2-CRPCn`; profile descriptions also write
+    // `CGATS21_CRPCn`. The spelling found is mapped to the registered one rather than emitted as
+    // it stands, which a preflight check for the registered name would not match (noted in
+    // review).
+    (1..=CRPCS).map(|n| format!("CGATS21-2-CRPC{n}")).find(|registered| {
+        [registered.replace("21-2-", "21_"), registered.replace('-', "_"), registered.replace("21-2-", "21-"), registered.clone()]
+            .iter()
+            .any(|s| names(s))
+    })
 }
 
 /// Target colour model for [`Cms::convert`].

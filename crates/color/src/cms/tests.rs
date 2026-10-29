@@ -122,10 +122,22 @@ fn a_registered_characterisation_is_the_one_the_profile_names() {
     use super::registered_identifier;
     for (description, want) in [
         ("PSOuncoated_v3_FOGRA52", Some("FOGRA52")),
-        ("eciCMYK v2 (FOGRA59)", Some("FOGRA59")),
+        // FOGRA59, which `eciCMYK v2` names, is a FOGRA data set but not an ICC registry
+        // entry -- the registry's highest FOGRA is 54 -- so it is not a name a PDF/X identifier
+        // may claim (noted in review). The profile name still reaches the reader as the
+        // condition.
+        ("eciCMYK v2 (FOGRA59)", None),
+        ("FOGRA54", Some("FOGRA54")),
+        ("FOGRA55", None),
+        ("FOGRA999", None),
         ("Coated FOGRA39 (ISO 12647-2:2004)", Some("FOGRA39")),
         ("fogra51 lowercase", Some("FOGRA51")),
-        ("CGATS21_CRPC6", Some("CGATS21_CRPC6")),
+        // The registry spells it `CGATS21-2-CRPC6`; a description writing it with an
+        // underscore gets the registered spelling back, which is the one a preflight check
+        // matches (noted in review).
+        ("CGATS21_CRPC6", Some("CGATS21-2-CRPC6")),
+        ("CGATS21-2-CRPC6", Some("CGATS21-2-CRPC6")),
+        ("CGATS21-2-CRPC8", None),
         ("GRACoL2013_CRPC6", None),
         ("Our House Press", None),
         ("FOGRA", None),
@@ -135,9 +147,9 @@ fn a_registered_characterisation_is_the_one_the_profile_names() {
         // FOGRA9 and a print provider's preflight read the wrong characterisation (review of
         // #1475). The offset and the digits now come from the same string.
         ("Coated \u{AE} FOGRA39 (ISO 12647-2:2004)", Some("FOGRA39")),
-        ("\u{201C}eciCMYK v2\u{201D} (FOGRA59)", Some("FOGRA59")),
+        ("\u{201C}PSO Coated v3\u{201D} (FOGRA51)", Some("FOGRA51")),
         ("\u{30B3}\u{30FC}\u{30C8} FOGRA51", Some("FOGRA51")),
-        ("Papier m\u{E4}t\u{E9} CGATS21_CRPC6", Some("CGATS21_CRPC6")),
+        ("Papier m\u{E4}t\u{E9} CGATS21_CRPC6", Some("CGATS21-2-CRPC6")),
         ("", None),
         // The boundary after the digits counts as much as the one before the name: these
         // descriptions name no registered identifier, and answering for them would put a PDF/X
