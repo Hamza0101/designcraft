@@ -124,6 +124,30 @@ pub(super) fn has_story_target(s: &Session) -> std::result::Result<(), String> {
     crate::cmd::text::story_of(s, &Value::Null).map(|_| ()).ok_or_else(|| "edit text or select a text frame".into())
 }
 
+/// Base64 PNG `file.exportPng` returns in all when it is given no `path`. Every page is held in
+/// the response at once, where a path export holds one page at a time and lets go: a text-filled
+/// letter page is 5 MiB of base64 at 300 ppi and 22 MiB at 1200 ppi (measured), so a long
+/// document inline is hundreds of megabytes of process memory. The renderer's own limit is per
+/// page and cannot see the total (noted in review). An export that needs more has a `path`.
+const MAX_INLINE_PNG_BYTES: usize = 128 << 20;
+
+/// `so_far` plus the base64 that `png` bytes encode to, or an error when the pages come to more
+/// than `limit` of it. The length is projected from the PNG rather than measured after encoding,
+/// so the limit is not passed in order to discover it.
+fn inline_total(id: &str, so_far: usize, png: usize, limit: usize) -> Result<usize> {
+    let total = so_far.saturating_add(png.div_ceil(3) * 4);
+    if total > limit {
+        return Err(bad(
+            id,
+            format!(
+                "these pages come to more than {} MiB of base64, which is all this export returns at once: give it a `path` to write the files to, or export fewer pages",
+                limit >> 20
+            ),
+        ));
+    }
+    Ok(total)
+}
+
 /// `file.exportPng`: each page as its own PNG, optionally with a transparent background (#1581).
 ///
 /// InDesign's Export ▸ PNG writes one file per page with the page number appended, and its
@@ -158,6 +182,7 @@ pub(super) fn export_png(s: &mut Session, p: &Value) -> Result<Value> {
 
     let mut renderer = designcraft_render::Renderer::new();
     let mut out = Vec::new();
+    let mut inline = 0;
     for &abs in &pages {
         let img = renderer
             .render_page_on(&st.doc, &s.cache, abs, scale, bleed, &opts, background)
@@ -173,9 +198,14 @@ pub(super) fn export_png(s: &mut Session, p: &Value) -> Result<Value> {
                 write_file(&file, &bytes)?;
                 out.push(json!({"path": file, "page": abs + 1, "bytes": bytes.len(), "width": width, "height": height}));
             }
-            None => out.push(
-                json!({"page": abs + 1, "base64": crate::cmd::file::base64_encode(&bytes), "bytes": bytes.len(), "width": width, "height": height}),
-            ),
+            None => {
+                // Before encoding and before keeping it: an export with no path holds every
+                // page's base64 at once, and the pages have no aggregate limit of their own.
+                inline = inline_total(ID, inline, bytes.len(), MAX_INLINE_PNG_BYTES)?;
+                out.push(
+                    json!({"page": abs + 1, "base64": crate::cmd::file::base64_encode(&bytes), "bytes": bytes.len(), "width": width, "height": height}),
+                );
+            }
         }
     }
     let key = if path.is_some() { "files" } else { "images" };
@@ -488,6 +518,42 @@ mod export_png_tests {
 
     use crate::Session;
     use crate::cmd::base64_decode;
+
+    /// An export with no `path` keeps every page's base64 in the response at once, and the
+    /// renderer's limit is per page: a text-filled letter page is 5 MiB of base64 at 300 ppi and
+    /// 22 MiB at 1200 ppi, so a long document was hundreds of megabytes of process memory with
+    /// nothing to stop it (noted in review).
+    #[test]
+    fn the_pages_an_inline_png_export_returns_are_bounded_in_all() {
+        use super::{MAX_INLINE_PNG_BYTES, inline_total};
+        const ID: &str = "file.exportPng";
+
+        // The budget is the base64 length, projected from the PNG so that the limit is not passed
+        // in order to discover it: three bytes encode to four.
+        assert_eq!(inline_total(ID, 0, 3, 8).unwrap(), 4);
+        assert_eq!(inline_total(ID, 4, 3, 8).unwrap(), 8, "a total that is exactly the limit is still within it");
+        let err = inline_total(ID, 8, 3, 8).unwrap_err().to_string();
+        assert!(err.contains("more than 0 MiB of base64"), "{err}");
+        assert!(err.contains("`path`"), "it says what to do instead: {err}");
+        // A partial group still costs a whole quartet, so the projection never under-counts.
+        assert_eq!(inline_total(ID, 0, 1, 4).unwrap(), 4);
+        // And the real limit is in megabytes, not in pages: it does not depend on the page count.
+        let err = inline_total(ID, MAX_INLINE_PNG_BYTES, 1, MAX_INLINE_PNG_BYTES).unwrap_err().to_string();
+        assert!(err.contains("more than 128 MiB"), "{err}");
+
+        // Within the limit nothing changes: four pages at 300 ppi come back whole, inline.
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"width": 612, "height": 792, "pages": 4, "facingPages": false})).unwrap();
+        let r = s.execute("file.exportPng", &json!({"ppi": 300})).unwrap();
+        let images = r["images"].as_array().expect("images").clone();
+        assert_eq!(images.len(), 4, "{r}");
+        let total: usize = images.iter().map(|i| i["base64"].as_str().unwrap_or("").len()).sum();
+        assert!(total > 0 && total < MAX_INLINE_PNG_BYTES, "{total} bytes of base64");
+        for (i, image) in images.iter().enumerate() {
+            assert_eq!(image["page"], json!(i + 1), "{image}");
+            assert!(base64_decode(image["base64"].as_str().unwrap()).starts_with(b"\x89PNG"), "page {} is a PNG", i + 1);
+        }
+    }
 
     /// The command offered itself with no document open and then failed at `s.doc()`, unlike
     /// every other document export, which use `has_doc` (noted in review).
