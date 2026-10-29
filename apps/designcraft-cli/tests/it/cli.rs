@@ -592,6 +592,20 @@ fn the_argument_parser_refuses_what_it_cannot_mean() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(dir.join("-dash.png").is_file(), "{:?}", std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>());
 
+    // A missing value is found before anything runs, so an export earlier on the line does not
+    // happen: reported later, `--export first.png --scale --export second.png` wrote first.png
+    // and only then failed, overwriting a file that was already there (noted in review).
+    let first = dir.join("first.png");
+    std::fs::write(&first, b"older file").unwrap();
+    let out =
+        cli().current_dir(&dir).args(["run", "--sample", "--export", first.to_str().unwrap(), "--scale", "--export", "second.png"]).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err:?}");
+    assert!(err.contains("--scale needs a value"), "{err:?}");
+    assert_eq!(std::fs::read(&first).unwrap(), b"older file", "the file that was already there is untouched");
+    assert!(!dir.join("second.png").exists(), "and nothing else is written");
+    std::fs::remove_file(&first).unwrap();
+
     // A missing value is still a missing value, with the message it had.
     let out = cli().args(["run", "--sample", "--export"]).output().unwrap();
     assert!(!out.status.success());

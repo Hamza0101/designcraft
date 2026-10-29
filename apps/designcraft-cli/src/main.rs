@@ -379,7 +379,28 @@ impl Export {
     }
 }
 
+/// Every option that takes a value has one, checked before anything runs. Found later, a missing
+/// value is reported only after the exports before it have been written -- and `run --export
+/// first.png --scale --export second.png` would then have overwritten an existing `first.png` on
+/// an invocation that fails (noted in review).
+fn values_present(args: &[String]) -> Result<(), String> {
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        i += 1;
+        if !matches!(a.as_str(), "--in" | "--cmd" | "--export" | "--all-pages" | "--page" | "--scale" | "--pdf-options") {
+            continue;
+        }
+        value(a, args.get(i))?;
+        // Step over the value, so one that looks like an option is not checked as one.
+        i += 1;
+    }
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<(), String> {
+    // Before the order check and before any export: a value error is about the line as written,
+    // and reporting it must not cost a file that was already there.
+    values_present(args)?;
     if let Some(opt) = option_after_last_export(args) {
         return Err(format!(
             "{opt} has no --export or --all-pages after it; options apply to the exports that follow them, so put it before its --export"
