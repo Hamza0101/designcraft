@@ -104,6 +104,20 @@ const MAX_BOOK_PDF_BYTES: usize = 512 << 20;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_BOOK_CHAPTER_BYTES: usize = MAX_BOOK_PDF_BYTES / 3;
 
+/// The two figures have to move together: if the chapters' budget is ever raised without the peak
+/// it is a third of, the export silently goes back to reaching three times what it allows, and
+/// the refusal names a number the check no longer enforces.
+///
+/// Checked here rather than in a test: `assertions_on_constants` refuses these in a test body
+/// (the gate runs clippy with `-D warnings`), and a `const` block evaluates them in every build
+/// instead of only under `cargo test` (noted in review).
+#[cfg(not(target_arch = "wasm32"))]
+const _: () = {
+    assert!(MAX_BOOK_CHAPTER_BYTES * 3 <= MAX_BOOK_PDF_BYTES, "three times the chapter budget is within the peak");
+    assert!((MAX_BOOK_CHAPTER_BYTES + 1) * 3 > MAX_BOOK_PDF_BYTES, "and it is as much as a third allows, not less");
+    assert!(MAX_BOOK_CHAPTER_BYTES / (1 << 20) == 170, "and the refusal names 170 MB");
+};
+
 /// A batch keeps only bounded path records in memory. Chapter snapshots live in a private
 /// temporary directory; only one document and serialized blob are live while staging.
 #[cfg(not(target_arch = "wasm32"))]
