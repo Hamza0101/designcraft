@@ -69,7 +69,23 @@ fn a_relative_book_path_still_knows_which_chapters_are_beside_it() {
     // nothing was reported however far outside it lived. The chapter has to be outside the
     // working directory itself to test this -- `here/other/x` is inside `here`, and reporting it
     // would be wrong.
-    let away = std::env::temp_dir().join("dc-book-away").join("mine.designcraft").to_string_lossy().into_owned();
+    //
+    // A sibling of the working directory, not `temp_dir()`: that honours `TMPDIR`, and a `TMPDIR`
+    // inside the working directory would leave the chapter inside the book's folder and fail the
+    // test for a reason that has nothing to do with the code (noted in review).
+    let outside = here.parent().expect("the working directory has a parent").join("dc-book-away");
+    let away = outside.join("mine.designcraft").to_string_lossy().into_owned();
     let b = Book { path: "Guide.dcbook".into(), documents: vec![beside.clone(), away.clone()], style_source: 0 };
-    assert_eq!(outside_book_folder(&b), vec![away], "the chapter outside the working directory is reported");
+    assert_eq!(outside_book_folder(&b), vec![away.clone()], "the chapter outside the working directory is reported");
+
+    // `..` in the book's path: `std::path::absolute` keeps it while the chapters' resolution
+    // folds it, so the folder was `here/sub/..` -- which `here/sub/ch1.designcraft` does not
+    // start with, and every chapter was reported as outside (noted in review).
+    let b = Book { path: "sub/../sub/Guide.dcbook".into(), documents: vec![beside.clone(), elsewhere.clone()], style_source: 0 };
+    assert_eq!(outside_book_folder(&b), vec![elsewhere.clone()], "the folder is folded as the chapters are");
+
+    // And one that climbs out of the working directory: the chapter beside the book is now the
+    // one outside, so the comparison is following the book rather than the working directory.
+    let b = Book { path: "../dc-book-away/Guide.dcbook".into(), documents: vec![beside.clone(), away], style_source: 0 };
+    assert_eq!(outside_book_folder(&b), vec![beside], "the book's own folder is what counts");
 }

@@ -54,11 +54,15 @@ fn chapter(b: &Book, path: &str) -> Result<String> {
 /// which is how InDesign books are usually arranged.
 #[cfg(not(target_arch = "wasm32"))]
 fn outside_book_folder(b: &Book) -> Vec<String> {
-    // Resolved first: `book.new` stores the path it was given, so a relative book path left the
-    // folder relative while every chapter resolves absolute. `dir/Guide.dcbook` then reported
-    // the chapters beside the book as outside it, and a bare `Guide.dcbook` gave an empty folder
-    // that every absolute path starts with, so nothing was reported at all (noted in review).
-    let Some(folder) = std::path::absolute(&b.path).ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf)) else {
+    // The folder comes from the chapters' own resolution, so the two cannot disagree about what
+    // a path means. `book.new` stores the path it was given, so a relative book path left the
+    // folder relative while every chapter resolves absolute: `dir/Guide.dcbook` reported the
+    // chapters beside the book as outside it, and a bare `Guide.dcbook` gave an empty folder that
+    // every absolute path starts with, so nothing was reported at all. `std::path::absolute`
+    // fixed those but keeps `..` where `craft_docpath` folds it, so a book opened as
+    // `sub/../Guide.dcbook` had a folder no chapter beside it could start with (both noted in
+    // review). Resolving a name inside the folder and taking its parent uses one rule for both.
+    let Some(folder) = chapter(b, "-").ok().and_then(|p| std::path::Path::new(&p).parent().map(std::path::Path::to_path_buf)) else {
         return b.documents.clone();
     };
     b.documents
